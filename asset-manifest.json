@@ -1,13 +1,13 @@
 {
   "files": {
-    "main.css": "./static/css/main.1663c521.css",
-    "main.js": "./static/js/main.24c94c2a.js",
-    "index.html": "./index.html",
-    "main.1663c521.css.map": "./static/css/main.1663c521.css.map",
-    "main.24c94c2a.js.map": "./static/js/main.24c94c2a.js.map"
+    "main.css": "/react-f1-game/static/css/main.1663c521.css",
+    "main.js": "/react-f1-game/static/js/main.66fe334d.js",
+    "index.html": "/react-f1-game/index.html",
+    "main.1663c521.css.map": "/react-f1-game/static/css/main.1663c521.css.map",
+    "main.66fe334d.js.map": "/react-f1-game/static/js/main.66fe334d.js.map"
   },
   "entrypoints": [
     "static/css/main.1663c521.css",
-    "static/js/main.24c94c2a.js"
+    "static/js/main.66fe334d.js"
   ]
 }
