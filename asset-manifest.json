@@ -1,13 +1,13 @@
 {
   "files": {
     "main.css": "/f1-racer/static/css/main.1663c521.css",
-    "main.js": "/f1-racer/static/js/main.f19a549f.js",
+    "main.js": "/f1-racer/static/js/main.8746b5ed.js",
     "index.html": "/f1-racer/index.html",
     "main.1663c521.css.map": "/f1-racer/static/css/main.1663c521.css.map",
-    "main.f19a549f.js.map": "/f1-racer/static/js/main.f19a549f.js.map"
+    "main.8746b5ed.js.map": "/f1-racer/static/js/main.8746b5ed.js.map"
   },
   "entrypoints": [
     "static/css/main.1663c521.css",
-    "static/js/main.f19a549f.js"
+    "static/js/main.8746b5ed.js"
   ]
 }
