@@ -109,6 +109,74 @@
   gap: 10px;
 }
 
+.career-strip,
+.finish-career-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.career-card {
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(122, 160, 212, 0.22);
+  background: rgba(9, 20, 35, 0.72);
+  text-align: center;
+}
+
+.career-label {
+  display: block;
+  color: #8ea8ca;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.career-card strong {
+  display: block;
+  color: #edf5ff;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.95rem;
+}
+
+.recent-form {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(122, 160, 212, 0.18);
+  background: rgba(7, 16, 29, 0.62);
+}
+
+.recent-label {
+  display: block;
+  margin-bottom: 8px;
+  color: #8ea8ca;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.recent-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.recent-pill {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #cfe2ff;
+  font-size: 0.78rem;
+}
+
+.recent-pill-good {
+  background: rgba(66, 245, 138, 0.14);
+  color: #77f8b6;
+}
+
 .btn {
   border: 1px solid transparent;
   border-radius: 999px;
@@ -450,6 +518,8 @@
   .minimap-shell { right: 12px; bottom: 12px; width: 170px; height: 170px; }
   .status-strip { top: 60px; font-size: 0.66rem; max-width: 92vw; }
   .controls-strip { bottom: 8px; font-size: 0.62rem; max-width: 94vw; }
+  .career-strip,
+  .finish-career-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {
@@ -458,6 +528,8 @@
   .timer-hud { top: 118px; right: 12px; width: calc(100vw - 24px); max-width: 320px; }
   .speed-hud { width: 160px; }
   .status-strip { top: 92px; }
+  .career-strip,
+  .finish-career-grid { grid-template-columns: 1fr; }
 }
 
 /* ─── DRS / ERS Screen Effects ─── */
@@ -590,6 +662,21 @@
   grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin: 14px 0;
+}
+
+.finish-callout {
+  margin: 8px 0 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(122, 160, 212, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+  color: #cfe2ff;
+}
+
+.finish-callout-hot {
+  border-color: rgba(255, 209, 88, 0.42);
+  background: rgba(255, 209, 88, 0.12);
+  color: #ffe28f;
 }
 
 .stat-block {

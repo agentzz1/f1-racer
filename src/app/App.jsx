@@ -28,6 +28,16 @@ const DEFAULT_SETTINGS = {
   aiLevel: 62
 };
 
+const DEFAULT_CAREER_STATS = {
+  races: 0,
+  wins: 0,
+  podiums: 0,
+  bestLap: null,
+  lastPosition: null,
+  lastWeather: 'CLEAR',
+  recentResults: []
+};
+
 const QUALITY_PRESETS = {
   low: {
     antialias: false,
@@ -92,6 +102,29 @@ const loadSettings = () => {
   }
 };
 
+const loadCareerStats = () => {
+  try {
+    const raw = localStorage.getItem('f1-pro-career');
+    if (!raw) return DEFAULT_CAREER_STATS;
+    const parsed = JSON.parse(raw);
+    return {
+      races: Math.max(0, Number(parsed.races) || 0),
+      wins: Math.max(0, Number(parsed.wins) || 0),
+      podiums: Math.max(0, Number(parsed.podiums) || 0),
+      bestLap: Number.isFinite(parsed.bestLap) ? parsed.bestLap : null,
+      lastPosition: Number.isFinite(parsed.lastPosition) ? parsed.lastPosition : null,
+      lastWeather: typeof parsed.lastWeather === 'string' ? parsed.lastWeather : 'CLEAR',
+      recentResults: Array.isArray(parsed.recentResults)
+        ? parsed.recentResults
+          .filter((entry) => entry && Number.isFinite(entry.position) && Number.isFinite(entry.total))
+          .slice(0, 4)
+        : []
+    };
+  } catch {
+    return DEFAULT_CAREER_STATS;
+  }
+};
+
 const paintSky = (ctx, w, h, weather, sunPhase) => {
   const g = ctx.createLinearGradient(0, 0, 0, h);
   g.addColorStop(0, weather.top);
@@ -113,9 +146,21 @@ const paintSky = (ctx, w, h, weather, sunPhase) => {
 export default function F1RacingGame() {
   const containerRef = useRef(null);
   const minimapRef = useRef(null);
+  const debugStateRef = useRef({
+    coordinateSystem: 'trackProgress is 0..1 around the circuit; lateralOffsetMeters is signed from centerline (+left, -right).',
+    phase: 'menu',
+    countdown: null,
+    player: null,
+    race: null,
+    leaders: [],
+    hudMessage: null
+  });
 
   const [settings, setSettings] = useState(loadSettings);
   const settingsRef = useRef(settings);
+
+  const [careerStats, setCareerStats] = useState(loadCareerStats);
+  const careerStatsRef = useRef(careerStats);
 
   const [phase, setPhase] = useState('menu');
   const phaseRef = useRef(phase);
@@ -159,8 +204,42 @@ export default function F1RacingGame() {
   }, [settings]);
 
   useEffect(() => {
+    careerStatsRef.current = careerStats;
+    localStorage.setItem('f1-pro-career', JSON.stringify(careerStats));
+  }, [careerStats]);
+
+  useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+
+  useEffect(() => {
+    debugStateRef.current = {
+      ...debugStateRef.current,
+      phase,
+      countdown,
+      career: {
+        races: careerStats.races,
+        wins: careerStats.wins,
+        podiums: careerStats.podiums,
+        bestLap: careerStats.bestLap ? Number(careerStats.bestLap.toFixed(3)) : null
+      },
+      result: result ? {
+        position: result.position,
+        total: Number(result.total.toFixed(3)),
+        best: result.best ? Number(result.best.toFixed(3)) : null,
+        weather: result.weather,
+        isNewBestLap: Boolean(result.isNewBestLap)
+      } : null
+    };
+  }, [phase, countdown, result, careerStats]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    window.render_game_to_text = () => JSON.stringify(debugStateRef.current);
+    return () => {
+      delete window.render_game_to_text;
+    };
+  }, []);
 
   const resetHud = () => {
     setHud((prev) => ({
@@ -211,9 +290,32 @@ export default function F1RacingGame() {
       const engineSource = ctx.createBufferSource();
       engineSource.loop = true;
       const engineGain = ctx.createGain();
-      engineGain.gain.value = 1.0;
+      engineGain.gain.value = 0.42;
       engineSource.connect(engineGain);
       engineGain.connect(masterGain);
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 1200;
+      filter.Q.value = 0.8;
+
+      const osc1 = ctx.createOscillator();
+      osc1.type = 'sawtooth';
+      const osc1Gain = ctx.createGain();
+      osc1Gain.gain.value = 0.18;
+      osc1.connect(osc1Gain);
+      osc1Gain.connect(filter);
+
+      const osc2 = ctx.createOscillator();
+      osc2.type = 'triangle';
+      const osc2Gain = ctx.createGain();
+      osc2Gain.gain.value = 0.12;
+      osc2.connect(osc2Gain);
+      osc2Gain.connect(filter);
+
+      filter.connect(masterGain);
+      osc1.start();
+      osc2.start();
 
       let bufferLoaded = false;
       const engineUrl = process.env.PUBLIC_URL + '/engine_loop.wav';
@@ -257,7 +359,8 @@ export default function F1RacingGame() {
 
       engineAudioRef.current = {
         ctx, masterGain, compressor,
-        engineSource, engineGain, bufferLoaded, whine, whineGain,
+        engineSource, engineGain, bufferLoaded, filter,
+        osc1, osc1Gain, osc2, osc2Gain, whine, whineGain,
         windGain, windFilter, windSource,
         lastGear: 1, lastThrottle: false, popCooldown: 0, currentRpm: 3000
       };
@@ -499,7 +602,6 @@ export default function F1RacingGame() {
     // Starting Grid Markings
     const startGridGeo = new THREE.BufferGeometry();
     const gridVerts = [];
-    const gridUV = [];
     const gridIndices = [];
     let gidx = 0;
 
@@ -1175,9 +1277,11 @@ export default function F1RacingGame() {
     const npcTangent = new THREE.Vector3();
     const npcNormal = new THREE.Vector3();
     const npcTarget = new THREE.Vector3();
+    let anim = 0;
+    let manualFrameMode = false;
+    let simulatedNow = last;
 
-    const animate = () => {
-      const now = performance.now();
+    const renderFrame = (now) => {
       const dt = clamp((now - last) / 1000, 0, 0.04);
       last = now;
 
@@ -1280,6 +1384,13 @@ export default function F1RacingGame() {
         }
 
         const kmh = Math.abs(speed) * 3.6;
+        const gearRanges = [0, 44, 75, 105, 138, 173, 215, 255, 400];
+        let gear = 1;
+        for (let i = 1; i < gearRanges.length; i += 1) {
+          if (kmh >= gearRanges[i]) gear = Math.min(8, i + 1);
+        }
+        currentGear = gear;
+        const rpm = clamp(4000 + ((kmh - gearRanges[gear - 1]) / Math.max(1, gearRanges[gear] - gearRanges[gear - 1])) * 13500, 4000, 18000);
         const drsReady = inDrsZone(pT) && kmh > 135;
         const drsOn = racing && keys.drs && drsReady;
         const ersOn = racing && keys.ers && ers > 1 && kmh > 60;
@@ -1539,11 +1650,37 @@ export default function F1RacingGame() {
             standingsList[0].p = lap - 1 + pT;
             npcs.forEach((n, i) => { standingsList[i + 1].p = n.lap + n.t; });
             standingsList.sort((a, b) => b.p - a.p);
+            const finalPosition = standingsList.findIndex((x) => x.id === 'YOU') + 1;
+            const totalTime = raceStart ? (now - raceStart) / 1000 : 0;
+            const currentCareer = careerStatsRef.current;
+            const isNewBestLap = bestLap !== null && (currentCareer.bestLap === null || bestLap < currentCareer.bestLap);
+            const nextCareer = {
+              races: currentCareer.races + 1,
+              wins: currentCareer.wins + (finalPosition === 1 ? 1 : 0),
+              podiums: currentCareer.podiums + (finalPosition <= 3 ? 1 : 0),
+              bestLap: isNewBestLap ? bestLap : currentCareer.bestLap,
+              lastPosition: finalPosition,
+              lastWeather: WEATHER_PRESETS[weatherTarget].name,
+              recentResults: [
+                {
+                  position: finalPosition,
+                  total: Number(totalTime.toFixed(3)),
+                  weather: WEATHER_PRESETS[weatherTarget].name,
+                  timestamp: Date.now()
+                },
+                ...currentCareer.recentResults
+              ].slice(0, 4)
+            };
+            careerStatsRef.current = nextCareer;
+            setCareerStats(nextCareer);
             setResult({
-              position: standingsList.findIndex((x) => x.id === 'YOU') + 1,
-              total: raceStart ? (now - raceStart) / 1000 : 0,
+              position: finalPosition,
+              total: totalTime,
               best: bestLap,
               weather: WEATHER_PRESETS[weatherTarget].name,
+              isNewBestLap,
+              personalBest: nextCareer.bestLap,
+              career: nextCareer,
               standings: standingsList.map((s, idx) => ({ id: s.id, position: idx + 1, laps: Math.floor(s.p) }))
             });
           }
@@ -1568,6 +1705,14 @@ export default function F1RacingGame() {
         npcs.forEach((n, i) => { standingsList[i + 1].p = n.lap + n.t; });
         standingsList.sort((a, b) => b.p - a.p);
         const pos = standingsList.findIndex((x) => x.id === 'YOU') + 1;
+        const raceTime = raceStart ? (now - raceStart) / 1000 : 0;
+        const lapTime = lapStart ? (now - lapStart) / 1000 : 0;
+        let hudMessage = '';
+        if (offTrack) hudMessage = 'OFF TRACK - GRIP REDUCED';
+        else if (keys.repair && inDrsZone(pT) && kmh < 55) hudMessage = 'PIT REPAIR IN PROGRESS';
+        else if (slip > 0.2) hudMessage = 'SLIPSTREAM BOOST';
+        else if (damage > 0.45) hudMessage = 'CAR DAMAGE HIGH - PIT WINDOW OPEN';
+        else if (drsReady && !drsOn) hudMessage = 'DRS READY';
 
         const vRatio = clamp(Math.abs(speed) / Math.max(maxSpeed, 1), 0, 1);
         const camForward = tmpA.set(Math.sin(heading), 0, Math.cos(heading));
@@ -1638,20 +1783,6 @@ export default function F1RacingGame() {
         hudTick += dt;
         if (hudTick > 0.09) {
           hudTick = 0;
-          const raceTime = raceStart ? (now - raceStart) / 1000 : 0;
-          const lapTime = lapStart ? (now - lapStart) / 1000 : 0;
-          const gearRanges = [0, 44, 75, 105, 138, 173, 215, 255, 400];
-          let gear = 1;
-          for (let i = 1; i < gearRanges.length; i += 1) if (kmh >= gearRanges[i]) gear = Math.min(8, i + 1);
-          currentGear = gear;
-
-          const rpm = clamp(4000 + ((kmh - gearRanges[gear - 1]) / Math.max(1, gearRanges[gear] - gearRanges[gear - 1])) * 13500, 4000, 18000);
-
-          let message = '';
-          if (offTrack) message = 'OFF TRACK - GRIP REDUCED';
-          else if (keys.repair && inDrsZone(pT) && kmh < 55) message = 'PIT REPAIR IN PROGRESS';
-          else if (slip > 0.2) message = 'SLIPSTREAM BOOST';
-
           // Fast DOM updates to bypass React re-renders for high-frequency data
           const speedEl = document.getElementById('hud-speed');
           if (speedEl) speedEl.textContent = Math.round(kmh);
@@ -1678,6 +1809,13 @@ export default function F1RacingGame() {
 
           setHud((prev) => ({
             ...prev,
+            speed: Math.round(kmh),
+            gear,
+            rpm: Math.round(rpm),
+            lap: Math.min(lap, TOTAL_LAPS),
+            lapTime,
+            raceTime,
+            position: pos,
             bestLap,
             sector,
             sectors: [...sectorTimes],
@@ -1690,8 +1828,45 @@ export default function F1RacingGame() {
             camera: CAMERA_MODES[cameraMode],
             slipstream: slip > 0.2,
             offTrack,
-            message
+            message: hudMessage
           }));
+
+          debugStateRef.current = {
+            coordinateSystem: 'trackProgress is 0..1 around the circuit; lateralOffsetMeters is signed from centerline (+left, -right).',
+            phase: state,
+            countdown: inCountdown ? (countdownStep === 0 ? 'GO' : countdownStep) : null,
+            player: {
+              lap: Math.min(lap, TOTAL_LAPS),
+              trackProgress: Number(pT.toFixed(3)),
+              lateralOffsetMeters: Number(lateral.toFixed(2)),
+              speedKmh: Math.round(kmh),
+              gear,
+              rpm: Math.round(rpm),
+              damagePct: Math.round(damage * 100)
+            },
+            race: {
+              position: pos,
+              competitors: npcs.length + 1,
+              sector,
+              lapTime: Number(lapTime.toFixed(3)),
+              raceTime: Number(raceTime.toFixed(3)),
+              bestLap: bestLap ? Number(bestLap.toFixed(3)) : null,
+              drsReady,
+              drsOn,
+              ersPct: Math.round(ers),
+              ersOn,
+              weather: WEATHER_PRESETS[weatherTarget].name,
+              camera: CAMERA_MODES[cameraMode],
+              slipstream: slip > 0.2,
+              offTrack,
+              finished
+            },
+            leaders: standingsList.slice(0, 3).map((entry) => ({
+              id: entry.id,
+              progress: Number(entry.p.toFixed(3))
+            })),
+            hudMessage: hudMessage || null
+          };
         }
 
         if (engineAudioRef.current) {
@@ -1726,6 +1901,8 @@ export default function F1RacingGame() {
 
             // Throttle affects volume and tonality
             audio.osc1Gain.gain.setTargetAtTime(keys.up ? 0.6 : 0.25, t, 0.1);
+            audio.osc2Gain.gain.setTargetAtTime(keys.up ? 0.3 : 0.14, t, 0.1);
+            audio.engineGain.gain.setTargetAtTime(0.22 + rpmNorm * 0.24 + (keys.up ? 0.06 : 0), t, 0.12);
 
             // ── Wind noise: speed dependent ──
             const speedRatio = clamp(kmh / 320, 0, 1);
@@ -1777,13 +1954,26 @@ export default function F1RacingGame() {
       }
 
       renderer.render(scene, camera);
+    };
+
+    const animate = () => {
+      if (manualFrameMode) return;
+      renderFrame(performance.now());
       if (!finished || phaseRef.current !== 'menu') anim = requestAnimationFrame(animate);
     };
 
-    let anim = requestAnimationFrame(animate);
+    window.advanceTime = async (ms) => {
+      manualFrameMode = true;
+      cancelAnimationFrame(anim);
+      simulatedNow += Math.max(ms, 40);
+      renderFrame(simulatedNow);
+    };
+
+    anim = requestAnimationFrame(animate);
 
     return () => {
       cancelAnimationFrame(anim);
+      delete window.advanceTime;
       window.removeEventListener('keydown', keyDown);
       window.removeEventListener('keyup', keyUp);
       window.removeEventListener('resize', resize);
@@ -1834,11 +2024,43 @@ export default function F1RacingGame() {
             </div>
 
             <div className="menu-actions">
-              <button type="button" className="btn btn-primary" onClick={startRace}>Start Race</button>
+              <button id="start-btn" type="button" className="btn btn-primary" onClick={startRace}>Start Race</button>
               <button type="button" className="btn btn-secondary" onClick={() => setShowSettings((v) => !v)}>
                 {showSettings ? 'Hide Setup' : 'Setup'}
               </button>
             </div>
+
+            <div className="career-strip">
+              <div className="career-card">
+                <span className="career-label">Races</span>
+                <strong>{careerStats.races}</strong>
+              </div>
+              <div className="career-card">
+                <span className="career-label">Wins</span>
+                <strong>{careerStats.wins}</strong>
+              </div>
+              <div className="career-card">
+                <span className="career-label">Podiums</span>
+                <strong>{careerStats.podiums}</strong>
+              </div>
+              <div className="career-card">
+                <span className="career-label">Personal Best</span>
+                <strong>{careerStats.bestLap ? formatTime(careerStats.bestLap) : '--:--.---'}</strong>
+              </div>
+            </div>
+
+            {careerStats.recentResults.length > 0 && (
+              <div className="recent-form">
+                <span className="recent-label">Recent Form</span>
+                <div className="recent-list">
+                  {careerStats.recentResults.map((entry) => (
+                    <span key={`${entry.timestamp}-${entry.position}`} className={`recent-pill ${entry.position <= 3 ? 'recent-pill-good' : ''}`}>
+                      P{entry.position} · {entry.weather}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {showSettings && (
               <div className="settings-panel">
@@ -1986,6 +2208,25 @@ export default function F1RacingGame() {
                   <div className="stat-block"><span className="stat-label">Best Lap</span><span className="stat-value">{result.best ? formatTime(result.best) : '--:--.---'}</span></div>
                   <div className="stat-block"><span className="stat-label">Weather</span><span className="stat-value">{result.weather}</span></div>
                 </div>
+                <div className={`finish-callout ${result.isNewBestLap ? 'finish-callout-hot' : ''}`}>
+                  {result.isNewBestLap ? 'New personal best lap.' : `Personal best: ${result.personalBest ? formatTime(result.personalBest) : '--:--.---'}`}
+                </div>
+                {result.career && (
+                  <div className="finish-career-grid">
+                    <div className="career-card">
+                      <span className="career-label">Career Races</span>
+                      <strong>{result.career.races}</strong>
+                    </div>
+                    <div className="career-card">
+                      <span className="career-label">Career Wins</span>
+                      <strong>{result.career.wins}</strong>
+                    </div>
+                    <div className="career-card">
+                      <span className="career-label">Career Podiums</span>
+                      <strong>{result.career.podiums}</strong>
+                    </div>
+                  </div>
+                )}
                 {result.standings && (
                   <div className="standings-table">
                     <div className="standings-header">FINAL CLASSIFICATION</div>
