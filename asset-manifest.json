@@ -1,13 +1,13 @@
 {
   "files": {
-    "main.css": "/react-f1-game/static/css/main.1663c521.css",
-    "main.js": "/react-f1-game/static/js/main.66fe334d.js",
-    "index.html": "/react-f1-game/index.html",
-    "main.1663c521.css.map": "/react-f1-game/static/css/main.1663c521.css.map",
-    "main.66fe334d.js.map": "/react-f1-game/static/js/main.66fe334d.js.map"
+    "main.css": "/f1-racer/static/css/main.1663c521.css",
+    "main.js": "/f1-racer/static/js/main.f19a549f.js",
+    "index.html": "/f1-racer/index.html",
+    "main.1663c521.css.map": "/f1-racer/static/css/main.1663c521.css.map",
+    "main.f19a549f.js.map": "/f1-racer/static/js/main.f19a549f.js.map"
   },
   "entrypoints": [
     "static/css/main.1663c521.css",
-    "static/js/main.66fe334d.js"
+    "static/js/main.f19a549f.js"
   ]
 }
