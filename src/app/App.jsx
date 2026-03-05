@@ -207,45 +207,25 @@ export default function F1RacingGame() {
       masterGain.connect(compressor);
       compressor.connect(ctx.destination);
 
-      // --- Engine Synthesizer ---
-      // Distorting the sound for a metallic racing scream
-      const distortion = ctx.createWaveShaper();
-      const samples = 4096;
-      const curve = new Float32Array(samples);
-      for (let i = 0; i < samples; i++) {
-        const x = (i * 2) / samples - 1;
-        // Aggressive soft clipping
-        curve[i] = (3 + 20) * x * 20 * (Math.PI / 180) / (Math.PI + 20 * Math.abs(x));
-      }
-      distortion.curve = curve;
-      distortion.oversample = '4x';
+      // --- Engine Sample playback ---
+      const engineSource = ctx.createBufferSource();
+      engineSource.loop = true;
+      const engineGain = ctx.createGain();
+      engineGain.gain.value = 1.0;
+      engineSource.connect(engineGain);
+      engineGain.connect(masterGain);
 
-      // Resonant filter to mimic exhaust pipe
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.value = 800;
-      filter.Q.value = 2.5;
-
-      distortion.connect(filter);
-      filter.connect(masterGain);
-
-      // Main exhaust note (Sawtooth is raspy and aggressive like an F1 car)
-      const osc1 = ctx.createOscillator();
-      osc1.type = 'sawtooth';
-      const osc1Gain = ctx.createGain();
-      osc1Gain.gain.value = 0.6;
-      osc1.connect(osc1Gain);
-      osc1Gain.connect(distortion);
-      osc1.start();
-
-      // Sub-harmonic for engine body (Square wave)
-      const osc2 = ctx.createOscillator();
-      osc2.type = 'square';
-      const osc2Gain = ctx.createGain();
-      osc2Gain.gain.value = 0.25;
-      osc2.connect(osc2Gain);
-      osc2Gain.connect(distortion);
-      osc2.start();
+      let bufferLoaded = false;
+      const engineUrl = process.env.PUBLIC_URL + '/engine_loop.wav';
+      fetch(engineUrl)
+        .then(res => res.arrayBuffer())
+        .then(buf => ctx.decodeAudioData(buf))
+        .then(decoded => {
+          engineSource.buffer = decoded;
+          engineSource.start();
+          bufferLoaded = true;
+        })
+        .catch(console.error);
 
       // Transmission / straight-cut gear whine (Triangle)
       const whine = ctx.createOscillator();
@@ -277,7 +257,7 @@ export default function F1RacingGame() {
 
       engineAudioRef.current = {
         ctx, masterGain, compressor,
-        osc1, osc1Gain, osc2, osc2Gain, whine, whineGain, filter,
+        engineSource, engineGain, bufferLoaded, whine, whineGain,
         windGain, windFilter, windSource,
         lastGear: 1, lastThrottle: false, popCooldown: 0, currentRpm: 3000
       };
