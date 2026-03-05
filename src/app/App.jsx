@@ -194,192 +194,73 @@ export default function F1RacingGame() {
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       const ctx = new AudioContext();
 
-      // ─── Master output chain ───
       const masterGain = ctx.createGain();
       masterGain.gain.value = 0;
 
       const compressor = ctx.createDynamicsCompressor();
-      compressor.threshold.value = -14;
-      compressor.knee.value = 8;
-      compressor.ratio.value = 8;
-      compressor.attack.value = 0.002;
-      compressor.release.value = 0.08;
-      compressor.connect(ctx.destination);
+      compressor.threshold.value = -12;
+      compressor.knee.value = 10;
+      compressor.ratio.value = 10;
+      compressor.attack.value = 0.005;
+      compressor.release.value = 0.05;
+
       masterGain.connect(compressor);
+      compressor.connect(ctx.destination);
 
-      // ─── Exhaust chain: heavy distortion + resonant body ───
-      const exhaustGain = ctx.createGain();
-      exhaustGain.gain.value = 1.0;
-
-      // Aggressive asymmetric distortion (like real exhaust nonlinearity)
-      const exhaustDist = ctx.createWaveShaper();
-      const dLen = 2048;
-      const dCurve = new Float32Array(dLen);
-      for (let i = 0; i < dLen; i++) {
-        const x = (i * 2) / dLen - 1;
-        // Asymmetric: positive side clips harder (exhaust blowdown pulse)
-        if (x >= 0) {
-          dCurve[i] = 1 - Math.exp(-x * 5);
-        } else {
-          dCurve[i] = -1 + Math.exp(x * 3);
-        }
+      // --- Engine Synthesizer ---
+      // Distorting the sound for a metallic racing scream
+      const distortion = ctx.createWaveShaper();
+      const samples = 4096;
+      const curve = new Float32Array(samples);
+      for (let i = 0; i < samples; i++) {
+        const x = (i * 2) / samples - 1;
+        // Aggressive soft clipping
+        curve[i] = (3 + 20) * x * 20 * (Math.PI / 180) / (Math.PI + 20 * Math.abs(x));
       }
-      exhaustDist.curve = dCurve;
-      exhaustDist.oversample = '4x';
+      distortion.curve = curve;
+      distortion.oversample = '4x';
 
-      // Exhaust resonance body (simulates pipe/muffler resonance)
-      const exhaustRes1 = ctx.createBiquadFilter();
-      exhaustRes1.type = 'peaking';
-      exhaustRes1.frequency.value = 160;
-      exhaustRes1.Q.value = 2.5;
-      exhaustRes1.gain.value = 10;
+      // Resonant filter to mimic exhaust pipe
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 800;
+      filter.Q.value = 2.5;
 
-      const exhaustRes2 = ctx.createBiquadFilter();
-      exhaustRes2.type = 'peaking';
-      exhaustRes2.frequency.value = 380;
-      exhaustRes2.Q.value = 2;
-      exhaustRes2.gain.value = 6;
+      distortion.connect(filter);
+      filter.connect(masterGain);
 
-      // Extra low-end body
-      const exhaustSub = ctx.createBiquadFilter();
-      exhaustSub.type = 'peaking';
-      exhaustSub.frequency.value = 80;
-      exhaustSub.Q.value = 1.5;
-      exhaustSub.gain.value = 8;
+      // Main exhaust note (Sawtooth is raspy and aggressive like an F1 car)
+      const osc1 = ctx.createOscillator();
+      osc1.type = 'sawtooth';
+      const osc1Gain = ctx.createGain();
+      osc1Gain.gain.value = 0.6;
+      osc1.connect(osc1Gain);
+      osc1Gain.connect(distortion);
+      osc1.start();
 
-      const exhaustHP = ctx.createBiquadFilter();
-      exhaustHP.type = 'highpass';
-      exhaustHP.frequency.value = 35;
-      exhaustHP.Q.value = 0.5;
+      // Sub-harmonic for engine body (Square wave)
+      const osc2 = ctx.createOscillator();
+      osc2.type = 'square';
+      const osc2Gain = ctx.createGain();
+      osc2Gain.gain.value = 0.25;
+      osc2.connect(osc2Gain);
+      osc2Gain.connect(distortion);
+      osc2.start();
 
-      const exhaustLP = ctx.createBiquadFilter();
-      exhaustLP.type = 'lowpass';
-      exhaustLP.frequency.value = 3200;
-      exhaustLP.Q.value = 0.7;
+      // Transmission / straight-cut gear whine (Triangle)
+      const whine = ctx.createOscillator();
+      whine.type = 'triangle';
+      const whineGain = ctx.createGain();
+      whineGain.gain.value = 0.15;
+      whine.connect(whineGain);
+      whineGain.connect(masterGain);
+      whine.start();
 
-      exhaustGain.connect(exhaustDist);
-      exhaustDist.connect(exhaustSub);
-      exhaustSub.connect(exhaustRes1);
-      exhaustRes1.connect(exhaustRes2);
-      exhaustRes2.connect(exhaustHP);
-      exhaustHP.connect(exhaustLP);
-      exhaustLP.connect(masterGain);
-
-      // ─── COMBUSTION ENGINE via ScriptProcessor ───
-      // Generates actual firing impulses for a V6: 3 power strokes per revolution
-      // Each cylinder fires a short sharp pressure pulse, not a smooth wave
-      const bufSize = 1024;
-      const engineNode = ctx.createScriptProcessor(bufSize, 0, 1);
-
-      // Engine state
-      const engState = {
-        rpm: 3000,          // current RPM
-        targetRpm: 3000,
-        phase: 0,           // crankshaft angle in radians
-        cylPhases: [0, Math.PI * 2 / 3, Math.PI * 4 / 3, Math.PI, Math.PI * 5 / 3, Math.PI * 1 / 3], // V6 120° firing order
-        throttle: 0,
-        prevSample: 0,
-        jitter: 0,          // combustion irregularity
-      };
-
-      engineNode.onaudioprocess = (e) => {
-        const out = e.outputBuffer.getChannelData(0);
-        const sr = ctx.sampleRate;
-        const rpm = engState.rpm;
-        const throttle = engState.throttle;
-
-        // Crankshaft angular velocity (rad/s) = RPM * 2π / 60
-        const omega = (rpm * Math.PI * 2) / 60;
-
-        // Each cylinder fires once every 2 revolutions (4-stroke)
-        // V6: 6 cylinders / 2 = 3 firings per revolution
-        // Firing frequency = RPM * 3 / 60
-        const firingFreq = (rpm * 3) / 60;
-
-        for (let i = 0; i < bufSize; i++) {
-          const dt = 1 / sr;
-          engState.phase += omega * dt;
-          if (engState.phase > Math.PI * 4) engState.phase -= Math.PI * 4; // 2 full revolutions
-
-          let sample = 0;
-
-          // Generate sharp impulse for each cylinder
-          for (let c = 0; c < 6; c++) {
-            // Cylinder fires at its phase offset within the 4π cycle
-            let cylAngle = (engState.phase + engState.cylPhases[c]) % (Math.PI * 4);
-
-            // Normalize to firing window (0 to 2π/3 between firings for V6)
-            const firingWindow = (Math.PI * 4) / 6; // 120° in 4-stroke terms
-            const inWindow = cylAngle % firingWindow;
-            const windowNorm = inWindow / firingWindow;
-
-            // Sharp combustion pulse: fast attack, exponential decay
-            // Only fires in first ~30% of the window
-            if (windowNorm < 0.3) {
-              const pulsePhase = windowNorm / 0.3;
-              // Sharp attack, then ring-down (like a real pressure wave)
-              const attack = pulsePhase < 0.08 ? pulsePhase / 0.08 : 1;
-              const decay = Math.exp(-pulsePhase * 6);
-              const combustion = attack * decay;
-
-              // Add some randomness (combustion is never perfect)
-              const jitter = 1 + (Math.random() - 0.5) * 0.12 * (1 - throttle * 0.6);
-
-              // Higher throttle = stronger combustion pulse
-              const strength = 0.3 + throttle * 0.7;
-              sample += combustion * strength * jitter * 0.35;
-            }
-          }
-
-          // Low-frequency rumble from crankshaft vibration (deeper, heavier)
-          const crankRumble = Math.sin(engState.phase * 0.25) * 0.14 * (1 + throttle * 0.6);
-          const crankSub = Math.sin(engState.phase * 0.125) * 0.08;
-          sample += crankRumble + crankSub;
-
-          // Mechanical valve noise (reduced to keep overall darker)
-          const valveNoise = (Math.random() - 0.5) * 0.025 * clamp(rpm / 12000, 0.15, 0.7);
-          sample += valveNoise;
-
-          // Heavier lowpass to darken the raw signal further
-          sample = engState.prevSample * 0.3 + sample * 0.7;
-          engState.prevSample = sample;
-
-          out[i] = sample;
-        }
-
-        // Smooth RPM transitions
-        engState.rpm = engState.rpm + (engState.targetRpm - engState.rpm) * 0.08;
-        engState.throttle = clamp(engState.throttle, 0, 1);
-      };
-
-      engineNode.connect(exhaustGain);
-
-      // ─── Turbo spool (subtle, not whiny) ───
-      // Use filtered noise instead of oscillator for more natural turbo sound
-      const turboBufSize = ctx.sampleRate * 2;
-      const turboBuf = ctx.createBuffer(1, turboBufSize, ctx.sampleRate);
-      const turboData = turboBuf.getChannelData(0);
-      for (let i = 0; i < turboBufSize; i++) {
-        turboData[i] = (Math.random() * 2 - 1) * 0.15;
-      }
-      const turboNoise = ctx.createBufferSource();
-      turboNoise.buffer = turboBuf;
-      turboNoise.loop = true;
-      const turboGain = ctx.createGain();
-      turboGain.gain.value = 0;
-      const turboFilter = ctx.createBiquadFilter();
-      turboFilter.type = 'bandpass';
-      turboFilter.frequency.value = 3000;
-      turboFilter.Q.value = 12;
-      turboNoise.connect(turboGain);
-      turboGain.connect(turboFilter);
-      turboFilter.connect(masterGain);
-      turboNoise.start();
-
-      // ─── Wind noise ───
-      const windBuf = ctx.createBuffer(1, turboBufSize, ctx.sampleRate);
+      // Wind noise
+      const windBufSize = ctx.sampleRate * 2;
+      const windBuf = ctx.createBuffer(1, windBufSize, ctx.sampleRate);
       const windData = windBuf.getChannelData(0);
-      for (let i = 0; i < turboBufSize; i++) {
+      for (let i = 0; i < windBufSize; i++) {
         windData[i] = (Math.random() * 2 - 1) * 0.2;
       }
       const windSource = ctx.createBufferSource();
@@ -388,9 +269,7 @@ export default function F1RacingGame() {
       const windGain = ctx.createGain();
       windGain.gain.value = 0;
       const windFilter = ctx.createBiquadFilter();
-      windFilter.type = 'lowpass';
-      windFilter.frequency.value = 400;
-      windFilter.Q.value = 0.5;
+      windFilter.type = 'bandpass';
       windSource.connect(windGain);
       windGain.connect(windFilter);
       windFilter.connect(masterGain);
@@ -398,11 +277,9 @@ export default function F1RacingGame() {
 
       engineAudioRef.current = {
         ctx, masterGain, compressor,
-        exhaustGain, exhaustLP, exhaustSub, exhaustRes1, exhaustRes2,
-        engineNode, engState,
-        turboGain, turboFilter,
+        osc1, osc1Gain, osc2, osc2Gain, whine, whineGain, filter,
         windGain, windFilter, windSource,
-        lastGear: 1, lastThrottle: false, popCooldown: 0
+        lastGear: 1, lastThrottle: false, popCooldown: 0, currentRpm: 3000
       };
     }
     if (engineAudioRef.current.ctx.state === 'suspended') {
@@ -978,7 +855,7 @@ export default function F1RacingGame() {
           b1.x, b1.y + 0.05, b1.z,
           b1.x, b1.y + BARRIER_HEIGHT, b1.z
         );
-        barrierIndices.push(bIdx, bIdx+1, bIdx+2, bIdx+2, bIdx+1, bIdx+3);
+        barrierIndices.push(bIdx, bIdx + 1, bIdx + 2, bIdx + 2, bIdx + 1, bIdx + 3);
         bIdx += 4;
       }
     }
@@ -1839,7 +1716,7 @@ export default function F1RacingGame() {
 
         if (engineAudioRef.current) {
           const audio = engineAudioRef.current;
-          const { ctx, engState } = audio;
+          const { ctx } = audio;
           const t = ctx.currentTime;
 
           if (racing || inCountdown) {
@@ -1847,77 +1724,63 @@ export default function F1RacingGame() {
             const activeGear = currentGear;
             const rpmNorm = clamp((kmh - gearRangesLocal[activeGear - 1]) / Math.max(1, gearRangesLocal[activeGear] - gearRangesLocal[activeGear - 1]), 0, 1);
 
-            // Map to RPM range: V6 turbo-hybrid idles ~3000, redline ~11000
-            const engineRPM = 3000 + rpmNorm * 8000;
-            engState.targetRpm = engineRPM;
-            engState.throttle = keys.up ? clamp(0.5 + rpmNorm * 0.5, 0.5, 1.0) : 0.15;
+            // V10 / V6 Hybrid Revving characteristics
+            let targetRpm = 3000 + rpmNorm * 10000;
+            if (!keys.up) targetRpm = Math.max(3000, targetRpm * 0.85); // engine braking dip
 
-            // ── Exhaust resonance shifts with RPM (kept low/bassy) ──
-            audio.exhaustRes1.frequency.setTargetAtTime(lerp(120, 300, rpmNorm), t, 0.06);
-            audio.exhaustRes1.gain.setTargetAtTime(lerp(12, 6, rpmNorm), t, 0.06);
-            audio.exhaustRes2.frequency.setTargetAtTime(lerp(300, 600, rpmNorm), t, 0.06);
+            // Smooth RPM
+            audio.currentRpm = audio.currentRpm + (targetRpm - audio.currentRpm) * Math.min(1, dt * 15);
+            const r = audio.currentRpm;
 
-            // Exhaust LP stays restrained (less highs = deeper tone)
-            audio.exhaustLP.frequency.setTargetAtTime(lerp(1800, 4500, rpmNorm), t, 0.05);
+            // Math: V6 fires 3 times per rev. R/60 = revs per sec.
+            const baseFreq = (r / 60) * 3;
 
-            // ── Turbo spool: filtered noise, builds with RPM ──
-            const turboFreq = lerp(1200, 3500, rpmNorm);
-            audio.turboFilter.frequency.setTargetAtTime(turboFreq, t, 0.12);
-            audio.turboFilter.Q.setTargetAtTime(lerp(6, 14, rpmNorm), t, 0.1);
-            const turboVol = keys.up ? lerp(0.0, 0.04, rpmNorm) : lerp(0.005, 0.025, rpmNorm);
-            audio.turboGain.gain.setTargetAtTime(turboVol, t, 0.15);
+            // Glide pitch
+            audio.osc1.frequency.setTargetAtTime(baseFreq, t, 0.05);
+            audio.osc2.frequency.setTargetAtTime(baseFreq * 0.5, t, 0.05); // Octave below for body
+            audio.whine.frequency.setTargetAtTime(baseFreq * 2.8, t, 0.08); // Transmission whine gets high
+
+            // Filter opens up with throttle and RPM for more aggression
+            const filterFreq = keys.up ? lerp(800, 6500, rpmNorm) : lerp(600, 2000, rpmNorm);
+            audio.filter.frequency.setTargetAtTime(filterFreq, t, 0.1);
+
+            // Throttle affects volume and tonality
+            audio.osc1Gain.gain.setTargetAtTime(keys.up ? 0.6 : 0.25, t, 0.1);
 
             // ── Wind noise: speed dependent ──
             const speedRatio = clamp(kmh / 320, 0, 1);
-            audio.windGain.gain.setTargetAtTime(speedRatio * 0.06, t, 0.2);
-            audio.windFilter.frequency.setTargetAtTime(lerp(250, 1600, speedRatio), t, 0.15);
+            audio.windGain.gain.setTargetAtTime(speedRatio * 0.08, t, 0.2);
+            audio.windFilter.frequency.setTargetAtTime(lerp(400, 2500, speedRatio), t, 0.15);
 
             // ── Exhaust pops on lift-off at high RPM ──
             audio.popCooldown = Math.max(0, audio.popCooldown - dt);
             if (!keys.up && audio.lastThrottle && rpmNorm > 0.45 && audio.popCooldown <= 0) {
-              const popLen = 0.03 + Math.random() * 0.05;
+              const popLen = 0.04 + Math.random() * 0.05;
               const popRate = ctx.sampleRate;
               const popBuf = ctx.createBuffer(1, Math.ceil(popLen * popRate), popRate);
               const popData = popBuf.getChannelData(0);
               for (let pi = 0; pi < popData.length; pi++) {
-                const env = 1 - pi / popData.length;
-                popData[pi] = (Math.random() * 2 - 1) * env * env * 0.9;
+                const env = Math.exp(-pi / (popData.length * 0.3));
+                popData[pi] = (Math.random() * 2 - 1) * env * 1.5;
               }
               const popSrc = ctx.createBufferSource();
               popSrc.buffer = popBuf;
               const popFilt = ctx.createBiquadFilter();
-              popFilt.type = 'bandpass';
-              popFilt.frequency.value = 300 + Math.random() * 500;
-              popFilt.Q.value = 1.5;
+              popFilt.type = 'lowpass';
+              popFilt.frequency.value = 800 + Math.random() * 1200;
               const popVol = ctx.createGain();
-              popVol.gain.value = 0.35 + Math.random() * 0.25;
+              popVol.gain.value = 0.4 + Math.random() * 0.3;
               popSrc.connect(popFilt);
               popFilt.connect(popVol);
               popVol.connect(audio.masterGain);
               popSrc.start(t);
               popSrc.stop(t + popLen);
-              audio.popCooldown = 0.04 + Math.random() * 0.08;
+              audio.popCooldown = 0.1 + Math.random() * 0.1;
             }
 
             // ── Gear shift thump ──
             if (activeGear !== audio.lastGear && activeGear > audio.lastGear) {
-              const shiftLen = 0.04;
-              const shiftBuf = ctx.createBuffer(1, Math.ceil(shiftLen * ctx.sampleRate), ctx.sampleRate);
-              const shiftData = shiftBuf.getChannelData(0);
-              for (let si = 0; si < shiftData.length; si++) {
-                const env = Math.exp(-si / (shiftData.length * 0.2));
-                shiftData[si] = (Math.random() * 2 - 1) * env * 0.6;
-              }
-              const shiftSrc = ctx.createBufferSource();
-              shiftSrc.buffer = shiftBuf;
-              const shiftVol = ctx.createGain();
-              shiftVol.gain.value = 0.3;
-              shiftSrc.connect(shiftVol);
-              shiftVol.connect(audio.masterGain);
-              shiftSrc.start(t);
-              shiftSrc.stop(t + shiftLen);
-              // Brief RPM dip on upshift
-              engState.rpm *= 0.82;
+              audio.currentRpm *= 0.75; // heavy rpm drop on upshift
             }
             audio.lastGear = activeGear;
             audio.lastThrottle = keys.up;
@@ -1928,8 +1791,7 @@ export default function F1RacingGame() {
             audio.masterGain.gain.setTargetAtTime(masterVol, t, 0.05);
           } else {
             audio.masterGain.gain.setTargetAtTime(0, t, 0.15);
-            engState.targetRpm = 3000;
-            engState.throttle = 0;
+            audio.currentRpm = 3000;
           }
         }
       }
@@ -2084,39 +1946,39 @@ export default function F1RacingGame() {
             <span>WASD / Arrows Drive</span><span>Shift DRS</span><span>F ERS</span><span>Space Drift</span><span>B Pit Repair</span><span>C Camera</span><span>Esc Pause</span>
           </div>
 
-{/* ── Mobile Touch Controls ── */}
-      <div className="touch-controls">
-        <div className="touch-left">
-          <button className="touch-btn touch-steer-l" onTouchStart={() => { keysRef.current.left = true; }} onTouchEnd={() => { keysRef.current.left = false; }} onContextMenu={(e) => e.preventDefault()}>&#9664;</button>
-          <button className="touch-btn touch-steer-r" onTouchStart={() => { keysRef.current.right = true; }} onTouchEnd={() => { keysRef.current.right = false; }} onContextMenu={(e) => e.preventDefault()}>&#9654;</button>
-        </div>
-        <div className="touch-right">
-          <button className="touch-btn touch-gas" onTouchStart={() => { keysRef.current.up = true; }} onTouchEnd={() => { keysRef.current.up = false; }} onContextMenu={(e) => e.preventDefault()}>GAS</button>
-          <button className="touch-btn touch-brake" onTouchStart={() => { keysRef.current.down = true; }} onTouchEnd={() => { keysRef.current.down = false; }} onContextMenu={(e) => e.preventDefault()}>BRK</button>
-        </div>
-        <div className="touch-extras">
-          <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drs = true; }} onTouchEnd={() => { keysRef.current.drs = false; }} onContextMenu={(e) => e.preventDefault()}>DRS</button>
-          <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.ers = true; }} onTouchEnd={() => { keysRef.current.ers = false; }} onContextMenu={(e) => e.preventDefault()}>ERS</button>
-          <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drift = true; }} onTouchEnd={() => { keysRef.current.drift = false; }} onContextMenu={(e) => e.preventDefault()}>DRFT</button>
-        </div>
-      </div>
-
-      {/* ── DRS/ERS screen effect overlays ── */}
-      {hud.drsOn && <div className="drs-screen-fx" />}
-      {hud.ersOn && <div className="ers-screen-fx" />}
-
-      {countdown !== null && (
-        <div className="countdown-overlay">
-          <div className="starting-lights">
-            {[1, 2, 3].map(n => (
-              <div key={n} className={`light-col ${countdown !== 'GO' && (4 - countdown) >= n ? 'light-on' : ''} ${countdown === 'GO' ? 'light-go' : ''}`}>
-                <div className="light-bulb" />
-                <div className="light-bulb" />
-              </div>
-            ))}
+          {/* ── Mobile Touch Controls ── */}
+          <div className="touch-controls">
+            <div className="touch-left">
+              <button className="touch-btn touch-steer-l" onTouchStart={() => { keysRef.current.left = true; }} onTouchEnd={() => { keysRef.current.left = false; }} onContextMenu={(e) => e.preventDefault()}>&#9664;</button>
+              <button className="touch-btn touch-steer-r" onTouchStart={() => { keysRef.current.right = true; }} onTouchEnd={() => { keysRef.current.right = false; }} onContextMenu={(e) => e.preventDefault()}>&#9654;</button>
+            </div>
+            <div className="touch-right">
+              <button className="touch-btn touch-gas" onTouchStart={() => { keysRef.current.up = true; }} onTouchEnd={() => { keysRef.current.up = false; }} onContextMenu={(e) => e.preventDefault()}>GAS</button>
+              <button className="touch-btn touch-brake" onTouchStart={() => { keysRef.current.down = true; }} onTouchEnd={() => { keysRef.current.down = false; }} onContextMenu={(e) => e.preventDefault()}>BRK</button>
+            </div>
+            <div className="touch-extras">
+              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drs = true; }} onTouchEnd={() => { keysRef.current.drs = false; }} onContextMenu={(e) => e.preventDefault()}>DRS</button>
+              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.ers = true; }} onTouchEnd={() => { keysRef.current.ers = false; }} onContextMenu={(e) => e.preventDefault()}>ERS</button>
+              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drift = true; }} onTouchEnd={() => { keysRef.current.drift = false; }} onContextMenu={(e) => e.preventDefault()}>DRFT</button>
+            </div>
           </div>
-          <div className="countdown-value">{countdown}</div>
-        </div>
+
+          {/* ── DRS/ERS screen effect overlays ── */}
+          {hud.drsOn && <div className="drs-screen-fx" />}
+          {hud.ersOn && <div className="ers-screen-fx" />}
+
+          {countdown !== null && (
+            <div className="countdown-overlay">
+              <div className="starting-lights">
+                {[1, 2, 3].map(n => (
+                  <div key={n} className={`light-col ${countdown !== 'GO' && (4 - countdown) >= n ? 'light-on' : ''} ${countdown === 'GO' ? 'light-go' : ''}`}>
+                    <div className="light-bulb" />
+                    <div className="light-bulb" />
+                  </div>
+                ))}
+              </div>
+              <div className="countdown-value">{countdown}</div>
+            </div>
           )}
 
           {phase === 'paused' && (
