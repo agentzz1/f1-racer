@@ -40,31 +40,69 @@ const DEFAULT_CAREER_STATS = {
 
 const QUALITY_PRESETS = {
   low: {
+    label: 'PERFORMANCE',
     antialias: false,
-    maxPixelRatio: 1,
-    shadowMapSize: 1024,
-    rainCount: 900,
-    skyResolution: 640,
-    skyUpdateInterval: 0.16,
-    minimapInterval: 0.12
+    maxPixelRatio: 0.85,
+    minPixelRatio: 0.6,
+    logarithmicDepthBuffer: false,
+    shadowMapEnabled: false,
+    shadowMapSize: 0,
+    rainCount: 260,
+    rainUpdateInterval: 0.05,
+    skyResolution: 256,
+    skySegments: 24,
+    skyUpdateInterval: 0.24,
+    minimapInterval: 0.22,
+    minimapSize: 170,
+    groundSegments: 140,
+    trackSamples: 540,
+    terrainCheckStep: 6,
+    treeCount: 650,
+    barrierStep: 4,
+    smokeCount: 72,
+    sparkCount: 48,
+    grassAnisotropy: 2,
+    wheelSegments: 10,
+    shadowUpdateInterval: 0.3,
+    useDetailedCarModel: false
   },
   medium: {
+    label: 'BALANCED',
     antialias: true,
-    maxPixelRatio: 1.25,
-    shadowMapSize: 1536,
-    rainCount: 1300,
-    skyResolution: 768,
-    skyUpdateInterval: 0.12,
-    minimapInterval: 0.1
+    maxPixelRatio: 1.05,
+    minPixelRatio: 0.8,
+    logarithmicDepthBuffer: false,
+    shadowMapEnabled: true,
+    shadowMapSize: 1024,
+    rainCount: 700,
+    rainUpdateInterval: 0.033,
+    skyResolution: 512,
+    skySegments: 32,
+    skyUpdateInterval: 0.16,
+    minimapInterval: 0.14,
+    minimapSize: 200,
+    groundSegments: 220,
+    trackSamples: 660,
+    terrainCheckStep: 5,
+    treeCount: 1200,
+    barrierStep: 3,
+    smokeCount: 96,
+    sparkCount: 64,
+    grassAnisotropy: 4,
+    wheelSegments: 12,
+    shadowUpdateInterval: 0.18,
+    useDetailedCarModel: true
   }
 };
 
 const detectQualityPreset = () => {
   if (typeof window === 'undefined') return QUALITY_PRESETS.medium;
   const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
+  const memory = typeof navigator !== 'undefined' ? (navigator.deviceMemory || 4) : 4;
   const dpr = window.devicePixelRatio || 1;
   const smallViewport = window.innerWidth < 1180 || window.innerHeight < 720;
-  if (cores <= 4 || dpr > 1.8 || smallViewport) return QUALITY_PRESETS.low;
+  const reducedMotion = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (cores <= 6 || memory <= 6 || dpr > 1.5 || smallViewport || reducedMotion) return QUALITY_PRESETS.low;
   return QUALITY_PRESETS.medium;
 };
 
@@ -195,7 +233,6 @@ export default function F1RacingGame() {
     fps: 60
   });
 
-  const engineAudioRef = useRef(null);
   const keysRef = useRef({ up: false, down: false, left: false, right: false, drift: false, drs: false, ers: false, repair: false });
 
   useEffect(() => {
@@ -217,6 +254,9 @@ export default function F1RacingGame() {
       ...debugStateRef.current,
       phase,
       countdown,
+      quality: {
+        preset: detectQualityPreset().label
+      },
       career: {
         races: careerStats.races,
         wins: careerStats.wins,
@@ -268,108 +308,6 @@ export default function F1RacingGame() {
     }));
   };
 
-  const initEngineSound = () => {
-    if (!engineAudioRef.current) {
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AudioContext();
-
-      const masterGain = ctx.createGain();
-      masterGain.gain.value = 0;
-
-      const compressor = ctx.createDynamicsCompressor();
-      compressor.threshold.value = -12;
-      compressor.knee.value = 10;
-      compressor.ratio.value = 10;
-      compressor.attack.value = 0.005;
-      compressor.release.value = 0.05;
-
-      masterGain.connect(compressor);
-      compressor.connect(ctx.destination);
-
-      // --- Engine Sample playback ---
-      const engineSource = ctx.createBufferSource();
-      engineSource.loop = true;
-      const engineGain = ctx.createGain();
-      engineGain.gain.value = 0.42;
-      engineSource.connect(engineGain);
-      engineGain.connect(masterGain);
-
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.value = 1200;
-      filter.Q.value = 0.8;
-
-      const osc1 = ctx.createOscillator();
-      osc1.type = 'sawtooth';
-      const osc1Gain = ctx.createGain();
-      osc1Gain.gain.value = 0.18;
-      osc1.connect(osc1Gain);
-      osc1Gain.connect(filter);
-
-      const osc2 = ctx.createOscillator();
-      osc2.type = 'triangle';
-      const osc2Gain = ctx.createGain();
-      osc2Gain.gain.value = 0.12;
-      osc2.connect(osc2Gain);
-      osc2Gain.connect(filter);
-
-      filter.connect(masterGain);
-      osc1.start();
-      osc2.start();
-
-      let bufferLoaded = false;
-      const engineUrl = process.env.PUBLIC_URL + '/engine_loop.wav';
-      fetch(engineUrl)
-        .then(res => res.arrayBuffer())
-        .then(buf => ctx.decodeAudioData(buf))
-        .then(decoded => {
-          engineSource.buffer = decoded;
-          engineSource.start();
-          bufferLoaded = true;
-        })
-        .catch(console.error);
-
-      // Transmission / straight-cut gear whine (Triangle)
-      const whine = ctx.createOscillator();
-      whine.type = 'triangle';
-      const whineGain = ctx.createGain();
-      whineGain.gain.value = 0.15;
-      whine.connect(whineGain);
-      whineGain.connect(masterGain);
-      whine.start();
-
-      // Wind noise
-      const windBufSize = ctx.sampleRate * 2;
-      const windBuf = ctx.createBuffer(1, windBufSize, ctx.sampleRate);
-      const windData = windBuf.getChannelData(0);
-      for (let i = 0; i < windBufSize; i++) {
-        windData[i] = (Math.random() * 2 - 1) * 0.2;
-      }
-      const windSource = ctx.createBufferSource();
-      windSource.buffer = windBuf;
-      windSource.loop = true;
-      const windGain = ctx.createGain();
-      windGain.gain.value = 0;
-      const windFilter = ctx.createBiquadFilter();
-      windFilter.type = 'bandpass';
-      windSource.connect(windGain);
-      windGain.connect(windFilter);
-      windFilter.connect(masterGain);
-      windSource.start();
-
-      engineAudioRef.current = {
-        ctx, masterGain, compressor,
-        engineSource, engineGain, bufferLoaded, filter,
-        osc1, osc1Gain, osc2, osc2Gain, whine, whineGain,
-        windGain, windFilter, windSource,
-        lastGear: 1, lastThrottle: false, popCooldown: 0, currentRpm: 3000
-      };
-    }
-    if (engineAudioRef.current.ctx.state === 'suspended') {
-      engineAudioRef.current.ctx.resume();
-    }
-  };
-
   const startRace = () => {
     resetHud();
     setResult(null);
@@ -377,7 +315,6 @@ export default function F1RacingGame() {
     setCountdown(3);
     setPhase('countdown');
     setSessionId((v) => v + 1);
-    initEngineSound();
   };
 
   const restartRace = () => {
@@ -386,7 +323,6 @@ export default function F1RacingGame() {
     setCountdown(3);
     setPhase('countdown');
     setSessionId((v) => v + 1);
-    initEngineSound();
   };
 
   const backToMenu = () => {
@@ -394,10 +330,6 @@ export default function F1RacingGame() {
     setResult(null);
     setCountdown(null);
     setSessionId((v) => v + 1);
-    const audio = engineAudioRef.current;
-    if (audio && audio.ctx.state === 'running') {
-      audio.ctx.suspend();
-    }
   };
 
   useEffect(() => {
@@ -414,11 +346,16 @@ export default function F1RacingGame() {
     const renderer = new THREE.WebGLRenderer({
       antialias: quality.antialias,
       powerPreference: 'high-performance',
-      logarithmicDepthBuffer: true
+      logarithmicDepthBuffer: quality.logarithmicDepthBuffer
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.maxPixelRatio));
-    renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.shadowMap.enabled = true;
+    let targetPixelRatio = Math.min(window.devicePixelRatio || 1, quality.maxPixelRatio);
+    let activePixelRatio = targetPixelRatio;
+    const applyRendererMetrics = () => {
+      renderer.setPixelRatio(activePixelRatio);
+      renderer.setSize(container.clientWidth, container.clientHeight);
+    };
+    applyRendererMetrics();
+    renderer.shadowMap.enabled = quality.shadowMapEnabled;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.shadowMap.autoUpdate = false;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -430,7 +367,7 @@ export default function F1RacingGame() {
     const hemi = new THREE.HemisphereLight(0xa7c9eb, 0x345533, 0.9);
     const sun = new THREE.DirectionalLight(0xfff1d1, 1.45);
     sun.position.set(150, 220, 120);
-    sun.castShadow = true;
+    sun.castShadow = quality.shadowMapEnabled;
     sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
     sun.shadow.camera.near = 1;
     sun.shadow.camera.far = 850;
@@ -447,7 +384,7 @@ export default function F1RacingGame() {
     paintSky(skyCtx, quality.skyResolution, quality.skyResolution, WEATHER_PRESETS[0], 0.3);
     const skyTexture = new THREE.CanvasTexture(skyCanvas);
     const sky = new THREE.Mesh(
-      new THREE.SphereGeometry(1300, 48, 48),
+      new THREE.SphereGeometry(1300, quality.skySegments, quality.skySegments),
       new THREE.MeshBasicMaterial({ map: skyTexture, side: THREE.BackSide, fog: false })
     );
     scene.add(sky);
@@ -470,16 +407,16 @@ export default function F1RacingGame() {
     grassTexture.wrapT = THREE.RepeatWrapping;
     grassTexture.repeat.set(40, 40);
     grassTexture.colorSpace = THREE.SRGBColorSpace;
-    grassTexture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
+    grassTexture.anisotropy = Math.min(renderer.capabilities.getMaxAnisotropy(), quality.grassAnisotropy);
 
-    const groundGeo = new THREE.PlaneGeometry(3000, 3000, 300, 300);
+    const groundGeo = new THREE.PlaneGeometry(3000, 3000, quality.groundSegments, quality.groundSegments);
     groundGeo.rotateX(-Math.PI / 2);
 
     const ground = new THREE.Mesh(
       groundGeo,
       new THREE.MeshStandardMaterial({ map: grassTexture, color: 0x3a7338, roughness: 0.96, metalness: 0.02 })
     );
-    ground.receiveShadow = true;
+    ground.receiveShadow = quality.shadowMapEnabled;
     scene.add(ground);
 
     const curve = new THREE.CatmullRomCurve3(
@@ -489,7 +426,7 @@ export default function F1RacingGame() {
       0.52
     );
 
-    const samples = 720;
+    const samples = quality.trackSamples;
     const points = [];
     const tangents = [];
     const normals = [];
@@ -518,7 +455,7 @@ export default function F1RacingGame() {
       let closestY = 0;
       let trenchCap = Infinity;
 
-      for (let j = 0; j < samples; j += 4) {
+      for (let j = 0; j < samples; j += quality.terrainCheckStep) {
         const pt = points[j];
         const dx = vx - pt.x;
         const dz = vz - pt.z;
@@ -596,7 +533,7 @@ export default function F1RacingGame() {
       metalness: 0.1,
     });
     const road = new THREE.Mesh(roadGeo, roadMat);
-    road.receiveShadow = true;
+    road.receiveShadow = quality.shadowMapEnabled;
     scene.add(road);
 
     // Starting Grid Markings
@@ -796,7 +733,7 @@ export default function F1RacingGame() {
     scene.add(new THREE.LineSegments(centerDashGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45 })));
 
     // Procedural Pine Forests (Eau Rouge Ardennes vibes)
-    const treeCount = 2000;
+    const treeCount = quality.treeCount;
     const trunkGeo = new THREE.CylinderGeometry(0.4, 0.6, 2.5, 5);
     trunkGeo.translate(0, 1.25, 0); // Put base at 0
     const leavesGeo = new THREE.ConeGeometry(2.5, 7, 7);
@@ -807,10 +744,10 @@ export default function F1RacingGame() {
 
     const leavesMesh = new THREE.InstancedMesh(leavesGeo, treeMaterial, treeCount);
     const trunkMesh = new THREE.InstancedMesh(trunkGeo, trunkMaterial, treeCount);
-    leavesMesh.castShadow = true;
-    trunkMesh.castShadow = true;
-    leavesMesh.receiveShadow = true;
-    trunkMesh.receiveShadow = true;
+    leavesMesh.castShadow = quality.shadowMapEnabled;
+    trunkMesh.castShadow = quality.shadowMapEnabled;
+    leavesMesh.receiveShadow = quality.shadowMapEnabled;
+    trunkMesh.receiveShadow = quality.shadowMapEnabled;
 
     const dummy = new THREE.Object3D();
     const tPos = new THREE.Vector3();
@@ -887,7 +824,7 @@ export default function F1RacingGame() {
     scene.add(grandstandGroup);
 
     // ── Tire Smoke Particle System ──
-    const SMOKE_COUNT = 120;
+    const SMOKE_COUNT = quality.smokeCount;
     const smokePositions = new Float32Array(SMOKE_COUNT * 3);
     const smokeSizes = new Float32Array(SMOKE_COUNT);
     const smokeAlphas = new Float32Array(SMOKE_COUNT);
@@ -903,7 +840,7 @@ export default function F1RacingGame() {
     let smokeIdx = 0;
 
     // ── Spark Particle System ──
-    const SPARK_COUNT = 80;
+    const SPARK_COUNT = quality.sparkCount;
     const sparkPositions = new Float32Array(SPARK_COUNT * 3);
     const sparkLife = new Float32Array(SPARK_COUNT);
     const sparkVel = new Float32Array(SPARK_COUNT * 3);
@@ -920,10 +857,10 @@ export default function F1RacingGame() {
     const barrierIndices = [];
     let bIdx = 0;
     const BARRIER_HEIGHT = 1.8;
-    for (let i = 0; i < samples; i += 3) {
+    for (let i = 0; i < samples; i += quality.barrierStep) {
       const p = points[i];
       const n = normals[i];
-      const ni = (i + 3) % samples;
+      const ni = (i + quality.barrierStep) % samples;
       const pn = points[ni];
       const nn = normals[ni];
       // Both sides
@@ -955,7 +892,7 @@ export default function F1RacingGame() {
     const player = new THREE.Group();
     const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.4, 4.8), new THREE.MeshStandardMaterial({ color: 0xd8141f, metalness: 0.85, roughness: 0.18 }));
     body.position.y = 0.35;
-    body.castShadow = true;
+    body.castShadow = quality.shadowMapEnabled;
     player.add(body);
 
     const nose = new THREE.Mesh(new THREE.ConeGeometry(0.42, 2.2, 10), body.material);
@@ -966,8 +903,9 @@ export default function F1RacingGame() {
     const wheels = [];
     const wheelPos = [[-1.0, 0.35, 2.2], [1.0, 0.35, 2.2], [-1.05, 0.38, -1.5], [1.05, 0.38, -1.5]];
     wheelPos.forEach((p) => {
-      const w = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.3, 16), new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.9 }));
+      const w = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.3, quality.wheelSegments), new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.9 }));
       w.rotation.z = Math.PI / 2;
+      w.castShadow = quality.shadowMapEnabled;
       w.position.set(p[0], p[1], p[2]);
       player.add(w);
       wheels.push(w);
@@ -977,29 +915,31 @@ export default function F1RacingGame() {
     flap.position.set(0, 1.15, -2.1);
     player.add(flap);
 
-    const loader = new GLTFLoader();
-    loader.load(
-      `${process.env.PUBLIC_URL}/redbull.glb`,
-      (gltf) => {
-        const model = gltf.scene;
-        model.scale.set(3.45, 3.45, 3.45);
-        model.rotation.y = -Math.PI / 2;
-        model.position.set(0, 0.05, -0.5);
-        model.traverse((obj) => {
-          if (obj.isMesh) {
-            obj.castShadow = true;
-            obj.receiveShadow = true;
-          }
-        });
-        body.visible = false;
-        nose.visible = false;
-        wheels.forEach((w) => { w.visible = false; });
-        flap.visible = false;
-        player.add(model);
-      },
-      undefined,
-      () => { }
-    );
+    if (quality.useDetailedCarModel) {
+      const loader = new GLTFLoader();
+      loader.load(
+        `${process.env.PUBLIC_URL}/redbull.glb`,
+        (gltf) => {
+          const model = gltf.scene;
+          model.scale.set(3.45, 3.45, 3.45);
+          model.rotation.y = -Math.PI / 2;
+          model.position.set(0, 0.05, -0.5);
+          model.traverse((obj) => {
+            if (obj.isMesh) {
+              obj.castShadow = quality.shadowMapEnabled;
+              obj.receiveShadow = quality.shadowMapEnabled;
+            }
+          });
+          body.visible = false;
+          nose.visible = false;
+          wheels.forEach((w) => { w.visible = false; });
+          flap.visible = false;
+          player.add(model);
+        },
+        undefined,
+        () => { }
+      );
+    }
 
     const startT = 0.015;
     player.position.copy(curve.getPointAt(startT));
@@ -1023,7 +963,7 @@ export default function F1RacingGame() {
       // Body
       const npcBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.35, 4.4), npcMat);
       npcBody.position.y = 0.35;
-      npcBody.castShadow = true;
+      npcBody.castShadow = quality.shadowMapEnabled;
       car.add(npcBody);
       // Nose cone
       const npcNoseMesh = new THREE.Mesh(new THREE.ConeGeometry(0.36, 1.8, 8), npcMat);
@@ -1035,11 +975,12 @@ export default function F1RacingGame() {
       npcWing.position.set(0, 1.05, -1.9);
       car.add(npcWing);
       // Wheels
-      const npcWheelGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.26, 12);
+      const npcWheelGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.26, quality.wheelSegments);
       const npcWheelMat = new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.9 });
       [[-0.9, 0.32, 1.9], [0.9, 0.32, 1.9], [-0.95, 0.34, -1.3], [0.95, 0.34, -1.3]].forEach(wp => {
         const wm = new THREE.Mesh(npcWheelGeo, npcWheelMat);
         wm.rotation.z = Math.PI / 2;
+        wm.castShadow = quality.shadowMapEnabled;
         wm.position.set(wp[0], wp[1], wp[2]);
         car.add(wm);
       });
@@ -1082,9 +1023,12 @@ export default function F1RacingGame() {
     rainFx.visible = false;
     scene.add(rainFx);
 
+    const minimapSize = quality.minimapSize;
     const minimap = document.createElement('canvas');
-    minimap.width = 220;
-    minimap.height = 220;
+    minimap.width = minimapSize;
+    minimap.height = minimapSize;
+    minimap.style.width = '100%';
+    minimap.style.height = '100%';
     const minimapCtx = minimap.getContext('2d');
     const minimapHost = minimapRef.current;
     if (minimapHost) {
@@ -1102,10 +1046,10 @@ export default function F1RacingGame() {
       maxZ = Math.max(maxZ, p.z);
     });
     const pad = 14;
-    const mapScale = Math.min((220 - pad * 2) / (maxX - minX), (220 - pad * 2) / (maxZ - minZ));
+    const mapScale = Math.min((minimapSize - pad * 2) / (maxX - minX), (minimapSize - pad * 2) / (maxZ - minZ));
     const mapPos = (p) => ({
       x: pad + (p.x - minX) * mapScale,
-      y: 220 - (pad + (p.z - minZ) * mapScale)
+      y: minimapSize - (pad + (p.z - minZ) * mapScale)
     });
     const mapTrackPoints = points.map((p) => mapPos(p));
     const mapDrsSegments = DRS_ZONES.map(([a, b]) => {
@@ -1116,12 +1060,12 @@ export default function F1RacingGame() {
       return segment;
     });
     const minimapStatic = document.createElement('canvas');
-    minimapStatic.width = 220;
-    minimapStatic.height = 220;
+    minimapStatic.width = minimapSize;
+    minimapStatic.height = minimapSize;
     const minimapStaticCtx = minimapStatic.getContext('2d');
     if (minimapStaticCtx) {
       minimapStaticCtx.fillStyle = 'rgba(8,16,28,0.92)';
-      minimapStaticCtx.fillRect(0, 0, 220, 220);
+      minimapStaticCtx.fillRect(0, 0, minimapSize, minimapSize);
 
       minimapStaticCtx.strokeStyle = '#30435c';
       minimapStaticCtx.lineWidth = 7;
@@ -1184,8 +1128,6 @@ export default function F1RacingGame() {
     window.addEventListener('keydown', keyDown);
     window.addEventListener('keyup', keyUp);
 
-    let currentGear = 1;
-
     let speed = 0;
     let steer = 0;
     let drift = 0;
@@ -1213,7 +1155,21 @@ export default function F1RacingGame() {
     let fpsTimer = 0;
     let skyTick = 1;
     let shadowTick = 1;
+    let rainTick = 0;
+    let perfAdjustTick = 0;
     let lastFov = camera.fov;
+
+    const sampleTrack = (t, outPoint, outTangent, outNormal) => {
+      const wrappedT = ((t % 1) + 1) % 1;
+      const scaledT = wrappedT * samples;
+      const baseIdx = Math.floor(scaledT) % samples;
+      const nextIdx = (baseIdx + 1) % samples;
+      const blend = scaledT - Math.floor(scaledT);
+
+      if (outPoint) outPoint.copy(points[baseIdx]).lerp(points[nextIdx], blend);
+      if (outTangent) outTangent.copy(tangents[baseIdx]).lerp(tangents[nextIdx], blend).normalize();
+      if (outNormal) outNormal.copy(normals[baseIdx]).lerp(normals[nextIdx], blend).normalize();
+    };
 
     const findNearestT = (pos, around) => {
       const center = Math.floor(around * samples);
@@ -1259,8 +1215,9 @@ export default function F1RacingGame() {
       if (!containerRef.current) return;
       camera.aspect = containerRef.current.clientWidth / containerRef.current.clientHeight;
       camera.updateProjectionMatrix();
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.maxPixelRatio));
-      renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+      targetPixelRatio = Math.min(window.devicePixelRatio || 1, quality.maxPixelRatio);
+      activePixelRatio = clamp(activePixelRatio, quality.minPixelRatio, targetPixelRatio);
+      applyRendererMetrics();
     };
     window.addEventListener('resize', resize);
 
@@ -1277,6 +1234,8 @@ export default function F1RacingGame() {
     const npcTangent = new THREE.Vector3();
     const npcNormal = new THREE.Vector3();
     const npcTarget = new THREE.Vector3();
+    const trackPoint = new THREE.Vector3();
+    const trackTangent = new THREE.Vector3();
     let anim = 0;
     let manualFrameMode = false;
     let simulatedNow = last;
@@ -1291,6 +1250,17 @@ export default function F1RacingGame() {
         fps = Math.round(fpsFrames / fpsTimer);
         fpsFrames = 0;
         fpsTimer = 0;
+      }
+      perfAdjustTick += dt;
+      if (perfAdjustTick >= 1) {
+        if (fps < 28 && activePixelRatio > quality.minPixelRatio + 0.01) {
+          activePixelRatio = Math.max(quality.minPixelRatio, activePixelRatio - 0.08);
+          applyRendererMetrics();
+        } else if (fps > 52 && activePixelRatio < targetPixelRatio - 0.01) {
+          activePixelRatio = Math.min(targetPixelRatio, activePixelRatio + 0.05);
+          applyRendererMetrics();
+        }
+        perfAdjustTick = 0;
       }
 
       const state = phaseRef.current;
@@ -1329,6 +1299,7 @@ export default function F1RacingGame() {
         const idx = Math.floor(pT * samples) % samples;
         const center = points[idx];
         const normal = normals[idx];
+        sampleTrack(pT, trackPoint, trackTangent, null);
 
         tmpA.copy(player.position).sub(center);
         const lateral = tmpA.dot(normal);
@@ -1360,7 +1331,7 @@ export default function F1RacingGame() {
         }
         sun.position.set(150 * Math.cos(sunPhase * Math.PI * 2), 150 + 130 * Math.sin(sunPhase * Math.PI), 120 * Math.sin(sunPhase * Math.PI * 2));
         shadowTick += dt;
-        if (shadowTick >= 0.14) {
+        if (quality.shadowMapEnabled && shadowTick >= quality.shadowUpdateInterval) {
           renderer.shadowMap.needsUpdate = true;
           shadowTick = 0;
         }
@@ -1368,19 +1339,25 @@ export default function F1RacingGame() {
         roadMat.roughness = 0.68 - rainLevel * 0.3;
         roadMat.metalness = 0.14 + rainLevel * 0.26;
 
-        rainFx.visible = rainLevel > 0.08;
+        rainFx.visible = rainLevel > 0.08 && quality.rainCount > 0;
         rainMat.opacity = clamp(0.08 + rainLevel * 0.65, 0.1, 0.78);
         if (rainFx.visible) {
-          for (let i = 0; i < rainCount; i += 1) {
-            const r = i * 3;
-            rainPos[r + 1] -= (18 + rainLevel * 68) * dt;
-            if (rainPos[r + 1] < 0 || Math.abs(rainPos[r] - player.position.x) > 50 || Math.abs(rainPos[r + 2] - player.position.z) > 50) {
-              rainPos[r] = player.position.x + (Math.random() - 0.5) * 84;
-              rainPos[r + 1] = 8 + Math.random() * 32;
-              rainPos[r + 2] = player.position.z + (Math.random() - 0.5) * 84;
+          rainTick += dt;
+          if (rainTick >= quality.rainUpdateInterval) {
+            for (let i = 0; i < rainCount; i += 1) {
+              const r = i * 3;
+              rainPos[r + 1] -= (18 + rainLevel * 68) * rainTick;
+              if (rainPos[r + 1] < 0 || Math.abs(rainPos[r] - player.position.x) > 50 || Math.abs(rainPos[r + 2] - player.position.z) > 50) {
+                rainPos[r] = player.position.x + (Math.random() - 0.5) * 84;
+                rainPos[r + 1] = 8 + Math.random() * 32;
+                rainPos[r + 2] = player.position.z + (Math.random() - 0.5) * 84;
+              }
             }
+            rainGeo.attributes.position.needsUpdate = true;
+            rainTick = 0;
           }
-          rainGeo.attributes.position.needsUpdate = true;
+        } else {
+          rainTick = 0;
         }
 
         const kmh = Math.abs(speed) * 3.6;
@@ -1389,7 +1366,6 @@ export default function F1RacingGame() {
         for (let i = 1; i < gearRanges.length; i += 1) {
           if (kmh >= gearRanges[i]) gear = Math.min(8, i + 1);
         }
-        currentGear = gear;
         const rpm = clamp(4000 + ((kmh - gearRanges[gear - 1]) / Math.max(1, gearRanges[gear] - gearRanges[gear - 1])) * 13500, 4000, 18000);
         const drsReady = inDrsZone(pT) && kmh > 135;
         const drsOn = racing && keys.drs && drsReady;
@@ -1439,7 +1415,7 @@ export default function F1RacingGame() {
           const moveYaw = heading + steer * drift * 0.25;
           player.position.x += Math.sin(moveYaw) * speed * dt;
           player.position.z += Math.cos(moveYaw) * speed * dt;
-          player.position.y = curve.getPointAt(pT).y + 0.03;
+          player.position.y = trackPoint.y + 0.03;
           if (offTrack) player.position.addScaledVector(normal, -lateral * dt * 0.8);
 
           npcs.forEach((npc) => {
@@ -1561,8 +1537,7 @@ export default function F1RacingGame() {
         }
 
         // Visual Chassis Physics
-        const pTangent = curve.getTangentAt(pT);
-        const hillSlope = Math.atan2(pTangent.y, Math.sqrt(pTangent.x * pTangent.x + pTangent.z * pTangent.z));
+        const hillSlope = Math.atan2(trackTangent.y, Math.sqrt(trackTangent.x * trackTangent.x + trackTangent.z * trackTangent.z));
 
         // 1. Pitch (Braking Dive & Acceleration Squat & Hill Slope)
         let targetPitch = -hillSlope;
@@ -1582,10 +1557,8 @@ export default function F1RacingGame() {
         // 3. Yaw (Slip Angle is naturally handled by difference between 'heading' and 'moveYaw')
         player.rotation.y = heading;
 
-        // 4. High-Speed / Engine RPM Vibrations
-        // We know the RPM from earlier: use it to drive a shake amplitude
-        // If engineAudioRef exists, we use its RPM, else fallback approximation
-        const rpmNorm = (engineAudioRef.current) ? clamp(((kmh) / maxSpeed), 0.2, 1) : clamp(kmh / 150, 0, 1);
+        // 4. High-Speed Vibrations
+        const rpmNorm = clamp(kmh / maxSpeed, 0.2, 1);
         const vibAmp = (clamp((kmh - 100) / 200, 0, 1) * 0.015) + (rpmNorm * 0.005);
 
         player.children.forEach((child) => {
@@ -1616,9 +1589,7 @@ export default function F1RacingGame() {
             npc.lap += 1;
           }
 
-          curve.getPointAt(npc.t, npcPoint);
-          curve.getTangentAt(npc.t, npcTangent);
-          npcNormal.set(-npcTangent.z, 0, npcTangent.x).normalize();
+          sampleTrack(npc.t, npcPoint, npcTangent, npcNormal);
           npcTarget.copy(npcPoint).addScaledVector(npcNormal, npc.lane);
           npcTarget.y += 0.25;
           npc.mesh.position.lerp(npcTarget, clamp(dt * 4.2, 0, 1));
@@ -1848,6 +1819,7 @@ export default function F1RacingGame() {
               position: pos,
               competitors: npcs.length + 1,
               sector,
+              fps,
               lapTime: Number(lapTime.toFixed(3)),
               raceTime: Number(raceTime.toFixed(3)),
               bestLap: bestLap ? Number(bestLap.toFixed(3)) : null,
@@ -1857,6 +1829,7 @@ export default function F1RacingGame() {
               ersOn,
               weather: WEATHER_PRESETS[weatherTarget].name,
               camera: CAMERA_MODES[cameraMode],
+              renderScale: Number(activePixelRatio.toFixed(2)),
               slipstream: slip > 0.2,
               offTrack,
               finished
@@ -1869,88 +1842,14 @@ export default function F1RacingGame() {
           };
         }
 
-        if (engineAudioRef.current) {
-          const audio = engineAudioRef.current;
-          const { ctx } = audio;
-          const t = ctx.currentTime;
-
-          if (racing || inCountdown) {
-            const gearRangesLocal = [0, 44, 75, 105, 138, 173, 215, 255, 400];
-            const activeGear = currentGear;
-            const rpmNorm = clamp((kmh - gearRangesLocal[activeGear - 1]) / Math.max(1, gearRangesLocal[activeGear] - gearRangesLocal[activeGear - 1]), 0, 1);
-
-            // V10 / V6 Hybrid Revving characteristics
-            let targetRpm = 3000 + rpmNorm * 10000;
-            if (!keys.up) targetRpm = Math.max(3000, targetRpm * 0.85); // engine braking dip
-
-            // Smooth RPM
-            audio.currentRpm = audio.currentRpm + (targetRpm - audio.currentRpm) * Math.min(1, dt * 15);
-            const r = audio.currentRpm;
-
-            // Math: V6 fires 3 times per rev. R/60 = revs per sec.
-            const baseFreq = (r / 60) * 3;
-
-            // Glide pitch
-            audio.osc1.frequency.setTargetAtTime(baseFreq, t, 0.05);
-            audio.osc2.frequency.setTargetAtTime(baseFreq * 0.5, t, 0.05); // Octave below for body
-            audio.whine.frequency.setTargetAtTime(baseFreq * 2.8, t, 0.08); // Transmission whine gets high
-
-            // Filter opens up with throttle and RPM for more aggression
-            const filterFreq = keys.up ? lerp(800, 6500, rpmNorm) : lerp(600, 2000, rpmNorm);
-            audio.filter.frequency.setTargetAtTime(filterFreq, t, 0.1);
-
-            // Throttle affects volume and tonality
-            audio.osc1Gain.gain.setTargetAtTime(keys.up ? 0.6 : 0.25, t, 0.1);
-            audio.osc2Gain.gain.setTargetAtTime(keys.up ? 0.3 : 0.14, t, 0.1);
-            audio.engineGain.gain.setTargetAtTime(0.22 + rpmNorm * 0.24 + (keys.up ? 0.06 : 0), t, 0.12);
-
+        
             // ── Wind noise: speed dependent ──
-            const speedRatio = clamp(kmh / 320, 0, 1);
-            audio.windGain.gain.setTargetAtTime(speedRatio * 0.08, t, 0.2);
-            audio.windFilter.frequency.setTargetAtTime(lerp(400, 2500, speedRatio), t, 0.15);
 
             // ── Exhaust pops on lift-off at high RPM ──
-            audio.popCooldown = Math.max(0, audio.popCooldown - dt);
-            if (!keys.up && audio.lastThrottle && rpmNorm > 0.45 && audio.popCooldown <= 0) {
-              const popLen = 0.04 + Math.random() * 0.05;
-              const popRate = ctx.sampleRate;
-              const popBuf = ctx.createBuffer(1, Math.ceil(popLen * popRate), popRate);
-              const popData = popBuf.getChannelData(0);
-              for (let pi = 0; pi < popData.length; pi++) {
-                const env = Math.exp(-pi / (popData.length * 0.3));
-                popData[pi] = (Math.random() * 2 - 1) * env * 1.5;
-              }
-              const popSrc = ctx.createBufferSource();
-              popSrc.buffer = popBuf;
-              const popFilt = ctx.createBiquadFilter();
-              popFilt.type = 'lowpass';
-              popFilt.frequency.value = 800 + Math.random() * 1200;
-              const popVol = ctx.createGain();
-              popVol.gain.value = 0.4 + Math.random() * 0.3;
-              popSrc.connect(popFilt);
-              popFilt.connect(popVol);
-              popVol.connect(audio.masterGain);
-              popSrc.start(t);
-              popSrc.stop(t + popLen);
-              audio.popCooldown = 0.1 + Math.random() * 0.1;
-            }
 
             // ── Gear shift thump ──
-            if (activeGear !== audio.lastGear && activeGear > audio.lastGear) {
-              audio.currentRpm *= 0.75; // heavy rpm drop on upshift
-            }
-            audio.lastGear = activeGear;
-            audio.lastThrottle = keys.up;
 
             // ── Master volume ──
-            const throttleVol = keys.up ? 0.42 : 0.16;
-            const masterVol = inCountdown ? 0.2 : throttleVol;
-            audio.masterGain.gain.setTargetAtTime(masterVol, t, 0.05);
-          } else {
-            audio.masterGain.gain.setTargetAtTime(0, t, 0.15);
-            audio.currentRpm = 3000;
-          }
-        }
       }
 
       renderer.render(scene, camera);
