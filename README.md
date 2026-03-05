@@ -3,7 +3,7 @@
   <p><strong>A fully playable 3D Formula 1 racing game built entirely in the browser using React and Three.js.</strong></p>
   
   <p>
-    <a href="https://agentzz1.github.io/react-f1-game"><strong>🎮 PLAY THE DEMO HERE!</strong></a>
+    <a href="https://agentzz1.github.io/f1-racer"><strong>🎮 PLAY THE DEMO HERE!</strong></a>
   </p>
 
   <p>
@@ -40,8 +40,8 @@ Want to run it locally or tweak the physics? It takes less than a minute.
 
 **1. Clone the repository**
 ```bash
-git clone https://github.com/agentzz1/react-f1-game.git
-cd react-f1-game
+git clone https://github.com/agentzz1/f1-racer.git
+cd f1-racer
 ```
 
 **2. Install dependencies**
