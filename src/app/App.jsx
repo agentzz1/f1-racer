@@ -169,6 +169,8 @@ export default function F1RacingGame() {
   const [countdown, setCountdown] = useState(null);
   const [sessionId, setSessionId] = useState(0);
   const [result, setResult] = useState(null);
+  const [motionEnabled, setMotionEnabled] = useState(false);
+  const [motionAvailable, setMotionAvailable] = useState(false);
 
   const [hud, setHud] = useState({
     speed: 0,
@@ -192,11 +194,15 @@ export default function F1RacingGame() {
     slipstream: false,
     offTrack: false,
     message: '',
-    fps: 60
+    fps: 60,
+    tireTemp: 80,
+    tireWear: 0,
+    fuel: 100
   });
 
   const engineAudioRef = useRef(null);
   const keysRef = useRef({ up: false, down: false, left: false, right: false, drift: false, drs: false, ers: false, repair: false });
+  const tiltSteerRef = useRef(0);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -241,6 +247,31 @@ export default function F1RacingGame() {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.DeviceOrientationEvent === 'undefined') return undefined;
+    setMotionAvailable(true);
+    const onOrientation = (event) => {
+      if (!motionEnabled) return;
+      const gamma = Number(event.gamma) || 0;
+      tiltSteerRef.current = clamp(gamma / 28, -1, 1);
+    };
+    window.addEventListener('deviceorientation', onOrientation);
+    return () => window.removeEventListener('deviceorientation', onOrientation);
+  }, [motionEnabled]);
+
+  const enableMotionControls = async () => {
+    try {
+      if (typeof window === 'undefined' || typeof window.DeviceOrientationEvent === 'undefined') return;
+      if (typeof window.DeviceOrientationEvent.requestPermission === 'function') {
+        const permission = await window.DeviceOrientationEvent.requestPermission();
+        if (permission !== 'granted') return;
+      }
+      setMotionEnabled(true);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   const resetHud = () => {
     setHud((prev) => ({
       ...prev,
@@ -264,7 +295,10 @@ export default function F1RacingGame() {
       slipstream: false,
       offTrack: false,
       message: '',
-      fps: 60
+      fps: 60,
+      tireTemp: 80,
+      tireWear: 0,
+      fuel: 100
     }));
   };
 
@@ -1201,6 +1235,9 @@ export default function F1RacingGame() {
     let lastCross = -999999;
     let ers = 100;
     let damage = 0;
+    let tireTemp = 82;
+    let tireWear = 0;
+    let fuelLoad = 100;
     let weatherIdx = 0;
     let weatherTarget = 0;
     let weatherBlend = 1;
@@ -1409,11 +1446,19 @@ export default function F1RacingGame() {
         });
 
         if (racing) {
-          const grip = clamp(1 - rainLevel * 0.28 - damage * 0.22, 0.45, 1);
-          const offPenalty = offTrack ? (hardOff ? 0.4 : 0.24) : 0;
+          const tireStress = Math.abs(steer) * clamp(kmh / 220, 0, 1) + (keys.down && kmh > 120 ? 0.35 : 0);
+          const tempTarget = 76 + tireStress * 42 - rainLevel * 9;
+          tireTemp = lerp(tireTemp, tempTarget, clamp(dt * 1.7, 0, 1));
+          tireWear = clamp(tireWear + dt * (0.0007 + tireStress * 0.0024 + Math.max(0, tireTemp - 105) * 0.0008), 0, 1);
+          fuelLoad = clamp(fuelLoad - dt * 0.09, 0, 100);
 
-          if (keys.up) speed += acc * (grip - offPenalty) * dt;
-          if (keys.down) speed -= brk * dt;
+          const tireGrip = clamp(1 - tireWear * 0.16 - Math.max(0, tireTemp - 100) * 0.0032, 0.68, 1);
+          const grip = clamp((1 - rainLevel * 0.28 - damage * 0.22) * tireGrip, 0.42, 1);
+          const offPenalty = offTrack ? (hardOff ? 0.4 : 0.24) : 0;
+          const massPenalty = 1 - fuelLoad * 0.0016;
+
+          if (keys.up) speed += acc * (grip - offPenalty) * massPenalty * dt;
+          if (keys.down) speed -= brk * (1 - offPenalty * 0.2) * dt;
           if (!keys.up && !keys.down) speed *= Math.exp(-(offTrack ? 2 : 1.35) * dt);
 
           drift = keys.drift && kmh > 85 ? clamp(drift + dt * 1.7, 0, 1) : clamp(drift - dt * 2.3, 0, 1);
@@ -1425,11 +1470,13 @@ export default function F1RacingGame() {
           let targetV = maxSpeed * (1 - damage * 0.24);
           targetV *= 1 - offPenalty * 0.68;
           targetV *= 1 + slip * 0.08;
+          targetV *= 1 - tireWear * 0.06;
           if (drsOn) targetV *= 1.14;
           if (ersOn) targetV *= 1.09;
           speed = clamp(speed, -25, targetV);
 
-          const sInput = (keys.left ? 1 : 0) - (keys.right ? 1 : 0);
+          const sInputRaw = (keys.left ? 1 : 0) - (keys.right ? 1 : 0);
+          const sInput = sInputRaw !== 0 ? sInputRaw : tiltSteerRef.current;
           steer = lerp(steer, sInput, clamp(dt * 10, 0, 1));
           const vRatio = clamp(Math.abs(speed) / Math.max(targetV, 1), 0, 1);
           const authority = (1 - vRatio * 0.72) * (grip - offPenalty * 0.35);
@@ -1828,7 +1875,10 @@ export default function F1RacingGame() {
             camera: CAMERA_MODES[cameraMode],
             slipstream: slip > 0.2,
             offTrack,
-            message: hudMessage
+            message: hudMessage,
+            tireTemp: Math.round(tireTemp),
+            tireWear: Math.round(tireWear * 100),
+            fuel: Math.round(fuelLoad)
           }));
 
           debugStateRef.current = {
@@ -2136,6 +2186,8 @@ export default function F1RacingGame() {
             <span className={hud.slipstream ? 'accent-green' : ''}>Slipstream: {hud.slipstream ? 'ON' : 'OFF'}</span>
             <span className={hud.offTrack ? 'accent-red' : ''}>Track: {hud.offTrack ? 'OFF' : 'ON'}</span>
             <span className={hud.damage > 45 ? 'accent-red' : (hud.damage > 22 ? 'accent-yellow' : '')}>Damage: {hud.damage}%</span>
+            <span className={hud.tireWear > 55 ? 'accent-yellow' : ''}>Tires: {hud.tireWear}% worn · {hud.tireTemp}°C</span>
+            <span>Fuel: {hud.fuel}%</span>
             <span>Weather: {hud.weather}</span>
             <span id="hud-fps">FPS: {hud.fps}</span>
           </div>
@@ -2145,7 +2197,7 @@ export default function F1RacingGame() {
           <div ref={minimapRef} className="minimap-shell" />
 
           <div className="controls-strip">
-            <span>WASD / Arrows Drive</span><span>Shift DRS</span><span>F ERS</span><span>Space Drift</span><span>B Pit Repair</span><span>C Camera</span><span>Esc Pause</span>
+            <span>WASD / Arrows Drive</span><span>Shift DRS</span><span>F ERS</span><span>Space Drift</span><span>B Pit Repair</span><span>C Camera</span><span>Esc Pause</span><span>Mobile: Touch + Tilt</span>
           </div>
 
           {/* ── Mobile Touch Controls ── */}
@@ -2159,6 +2211,7 @@ export default function F1RacingGame() {
               <button className="touch-btn touch-brake" onTouchStart={() => { keysRef.current.down = true; }} onTouchEnd={() => { keysRef.current.down = false; }} onContextMenu={(e) => e.preventDefault()}>BRK</button>
             </div>
             <div className="touch-extras">
+              {motionAvailable && !motionEnabled && <button type="button" className="touch-btn touch-sm" onClick={enableMotionControls}>TILT</button>}
               <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drs = true; }} onTouchEnd={() => { keysRef.current.drs = false; }} onContextMenu={(e) => e.preventDefault()}>DRS</button>
               <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.ers = true; }} onTouchEnd={() => { keysRef.current.ers = false; }} onContextMenu={(e) => e.preventDefault()}>ERS</button>
               <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drift = true; }} onTouchEnd={() => { keysRef.current.drift = false; }} onContextMenu={(e) => e.preventDefault()}>DRFT</button>
