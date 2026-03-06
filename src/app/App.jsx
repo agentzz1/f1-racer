@@ -230,10 +230,29 @@ export default function F1RacingGame() {
     slipstream: false,
     offTrack: false,
     message: '',
-    fps: 60
+    fps: 60,
+    tireTemp: 82
   });
 
   const keysRef = useRef({ up: false, down: false, left: false, right: false, drift: false, drs: false, ers: false, repair: false });
+  const tiltSteerRef = useRef(0);
+  const [tiltEnabled, setTiltEnabled] = useState(false);
+  const tiltEnabledRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const onOrientation = (event) => {
+      if (!tiltEnabledRef.current) return;
+      const gamma = Number(event.gamma);
+      if (!Number.isFinite(gamma)) return;
+      const normalized = clamp(gamma / 32, -1, 1);
+      const deadZone = 0.08;
+      const shaped = Math.abs(normalized) < deadZone ? 0 : normalized;
+      tiltSteerRef.current = shaped;
+    };
+    window.addEventListener('deviceorientation', onOrientation);
+    return () => window.removeEventListener('deviceorientation', onOrientation);
+  }, [tiltEnabled]);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -248,6 +267,10 @@ export default function F1RacingGame() {
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+
+  useEffect(() => {
+    tiltEnabledRef.current = tiltEnabled;
+  }, [tiltEnabled]);
 
   useEffect(() => {
     debugStateRef.current = {
@@ -304,7 +327,8 @@ export default function F1RacingGame() {
       slipstream: false,
       offTrack: false,
       message: '',
-      fps: 60
+      fps: 60,
+      tireTemp: 82
     }));
   };
 
@@ -1131,6 +1155,7 @@ export default function F1RacingGame() {
     let speed = 0;
     let steer = 0;
     let drift = 0;
+    let tireTemp = 82;
     let pT = startT;
     let prevT = startT;
     let lap = 1;
@@ -1385,8 +1410,17 @@ export default function F1RacingGame() {
         });
 
         if (racing) {
-          const grip = clamp(1 - rainLevel * 0.28 - damage * 0.22, 0.45, 1);
+          const baseGrip = clamp(1 - rainLevel * 0.28 - damage * 0.22, 0.45, 1);
+          const downforceGrip = clamp(kmh / 320, 0, 0.18);
+          const tireTempTarget = 78 + kmh * 0.22 + Math.abs(steer) * 26 + drift * 18;
+          tireTemp = lerp(tireTemp, tireTempTarget, clamp(dt * 0.55, 0, 1));
+          const tempDelta = Math.abs(tireTemp - 94);
+          const tempGripPenalty = clamp(tempDelta / 180, 0, 0.22);
+          const grip = clamp(baseGrip + downforceGrip - tempGripPenalty, 0.42, 1.08);
           const offPenalty = offTrack ? (hardOff ? 0.4 : 0.24) : 0;
+
+          const aeroDrag = (0.0012 + rainLevel * 0.0004) * speed * Math.abs(speed);
+          speed -= aeroDrag * dt;
 
           if (keys.up) speed += acc * (grip - offPenalty) * dt;
           if (keys.down) speed -= brk * dt;
@@ -1405,7 +1439,8 @@ export default function F1RacingGame() {
           if (ersOn) targetV *= 1.09;
           speed = clamp(speed, -25, targetV);
 
-          const sInput = (keys.left ? 1 : 0) - (keys.right ? 1 : 0);
+          const keyInput = (keys.left ? 1 : 0) - (keys.right ? 1 : 0);
+          const sInput = clamp(keyInput + (tiltEnabledRef.current ? tiltSteerRef.current : 0), -1, 1);
           steer = lerp(steer, sInput, clamp(dt * 10, 0, 1));
           const vRatio = clamp(Math.abs(speed) / Math.max(targetV, 1), 0, 1);
           const authority = (1 - vRatio * 0.72) * (grip - offPenalty * 0.35);
@@ -1799,7 +1834,8 @@ export default function F1RacingGame() {
             camera: CAMERA_MODES[cameraMode],
             slipstream: slip > 0.2,
             offTrack,
-            message: hudMessage
+            message: hudMessage,
+            tireTemp: Math.round(tireTemp)
           }));
 
           debugStateRef.current = {
@@ -1813,7 +1849,8 @@ export default function F1RacingGame() {
               speedKmh: Math.round(kmh),
               gear,
               rpm: Math.round(rpm),
-              damagePct: Math.round(damage * 100)
+              damagePct: Math.round(damage * 100),
+              tireTempC: Math.round(tireTemp)
             },
             race: {
               position: pos,
@@ -2036,6 +2073,8 @@ export default function F1RacingGame() {
             <span className={hud.offTrack ? 'accent-red' : ''}>Track: {hud.offTrack ? 'OFF' : 'ON'}</span>
             <span className={hud.damage > 45 ? 'accent-red' : (hud.damage > 22 ? 'accent-yellow' : '')}>Damage: {hud.damage}%</span>
             <span>Weather: {hud.weather}</span>
+            <span className={hud.tireTemp > 112 || hud.tireTemp < 66 ? 'accent-yellow' : ''}>Tyres: {hud.tireTemp}°C</span>
+            <span>{tiltEnabled ? 'Input: Tilt' : 'Input: Buttons'}</span>
             <span id="hud-fps">FPS: {hud.fps}</span>
           </div>
 
@@ -2044,23 +2083,24 @@ export default function F1RacingGame() {
           <div ref={minimapRef} className="minimap-shell" />
 
           <div className="controls-strip">
-            <span>WASD / Arrows Drive</span><span>Shift DRS</span><span>F ERS</span><span>Space Drift</span><span>B Pit Repair</span><span>C Camera</span><span>Esc Pause</span>
+            <span>WASD / Arrows Drive</span><span>Shift DRS</span><span>F ERS</span><span>Space Drift</span><span>B Pit Repair</span><span>C Camera</span><span>Esc Pause</span><span>Mobile: Tilt Mode</span>
           </div>
 
           {/* ── Mobile Touch Controls ── */}
           <div className="touch-controls">
             <div className="touch-left">
-              <button className="touch-btn touch-steer-l" onTouchStart={() => { keysRef.current.left = true; }} onTouchEnd={() => { keysRef.current.left = false; }} onContextMenu={(e) => e.preventDefault()}>&#9664;</button>
-              <button className="touch-btn touch-steer-r" onTouchStart={() => { keysRef.current.right = true; }} onTouchEnd={() => { keysRef.current.right = false; }} onContextMenu={(e) => e.preventDefault()}>&#9654;</button>
+              <button className="touch-btn touch-steer-l" onTouchStart={() => { keysRef.current.left = true; }} onTouchEnd={() => { keysRef.current.left = false; }} onTouchCancel={() => { keysRef.current.left = false; }} onMouseDown={() => { keysRef.current.left = true; }} onMouseUp={() => { keysRef.current.left = false; }} onContextMenu={(e) => e.preventDefault()}>&#9664;</button>
+              <button className="touch-btn touch-steer-r" onTouchStart={() => { keysRef.current.right = true; }} onTouchEnd={() => { keysRef.current.right = false; }} onTouchCancel={() => { keysRef.current.right = false; }} onMouseDown={() => { keysRef.current.right = true; }} onMouseUp={() => { keysRef.current.right = false; }} onContextMenu={(e) => e.preventDefault()}>&#9654;</button>
             </div>
             <div className="touch-right">
-              <button className="touch-btn touch-gas" onTouchStart={() => { keysRef.current.up = true; }} onTouchEnd={() => { keysRef.current.up = false; }} onContextMenu={(e) => e.preventDefault()}>GAS</button>
-              <button className="touch-btn touch-brake" onTouchStart={() => { keysRef.current.down = true; }} onTouchEnd={() => { keysRef.current.down = false; }} onContextMenu={(e) => e.preventDefault()}>BRK</button>
+              <button className="touch-btn touch-gas" onTouchStart={() => { keysRef.current.up = true; }} onTouchEnd={() => { keysRef.current.up = false; }} onTouchCancel={() => { keysRef.current.up = false; }} onMouseDown={() => { keysRef.current.up = true; }} onMouseUp={() => { keysRef.current.up = false; }} onContextMenu={(e) => e.preventDefault()}>GAS</button>
+              <button className="touch-btn touch-brake" onTouchStart={() => { keysRef.current.down = true; }} onTouchEnd={() => { keysRef.current.down = false; }} onTouchCancel={() => { keysRef.current.down = false; }} onMouseDown={() => { keysRef.current.down = true; }} onMouseUp={() => { keysRef.current.down = false; }} onContextMenu={(e) => e.preventDefault()}>BRK</button>
             </div>
             <div className="touch-extras">
-              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drs = true; }} onTouchEnd={() => { keysRef.current.drs = false; }} onContextMenu={(e) => e.preventDefault()}>DRS</button>
-              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.ers = true; }} onTouchEnd={() => { keysRef.current.ers = false; }} onContextMenu={(e) => e.preventDefault()}>ERS</button>
-              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drift = true; }} onTouchEnd={() => { keysRef.current.drift = false; }} onContextMenu={(e) => e.preventDefault()}>DRFT</button>
+              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drs = true; }} onTouchEnd={() => { keysRef.current.drs = false; }} onTouchCancel={() => { keysRef.current.drs = false; }} onMouseDown={() => { keysRef.current.drs = true; }} onMouseUp={() => { keysRef.current.drs = false; }} onContextMenu={(e) => e.preventDefault()}>DRS</button>
+              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.ers = true; }} onTouchEnd={() => { keysRef.current.ers = false; }} onTouchCancel={() => { keysRef.current.ers = false; }} onMouseDown={() => { keysRef.current.ers = true; }} onMouseUp={() => { keysRef.current.ers = false; }} onContextMenu={(e) => e.preventDefault()}>ERS</button>
+              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drift = true; }} onTouchEnd={() => { keysRef.current.drift = false; }} onTouchCancel={() => { keysRef.current.drift = false; }} onMouseDown={() => { keysRef.current.drift = true; }} onMouseUp={() => { keysRef.current.drift = false; }} onContextMenu={(e) => e.preventDefault()}>DRFT</button>
+              <button className={`touch-btn touch-sm ${tiltEnabled ? 'touch-btn-active' : ''}`} type="button" onClick={() => setTiltEnabled((v) => !v)} onContextMenu={(e) => e.preventDefault()}>{tiltEnabled ? 'TILT ON' : 'TILT'}</button>
             </div>
           </div>
 
