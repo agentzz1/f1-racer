@@ -23,6 +23,8 @@
   color: var(--text);
   overflow: hidden;
   font-family: 'Rajdhani', 'Segoe UI', sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .f1-canvas {
@@ -511,13 +513,38 @@
 }
 
 @media (max-width: 900px) {
-  .top-hud { left: 12px; right: 12px; top: 12px; }
-  .speed-hud { left: 12px; bottom: 12px; width: 192px; }
-  .speed-main { font-size: 2.9rem; }
-  .timer-hud { right: 12px; top: 72px; width: 220px; }
-  .minimap-shell { right: 12px; bottom: 12px; width: 170px; height: 170px; }
-  .status-strip { top: 60px; font-size: 0.66rem; max-width: 92vw; }
-  .controls-strip { bottom: 8px; font-size: 0.62rem; max-width: 94vw; }
+  .top-hud {
+    left: 10px;
+    right: 10px;
+    top: calc(env(safe-area-inset-top, 0px) + 8px);
+    gap: 6px;
+  }
+  .top-hud-left,
+  .top-hud-right { gap: 6px; }
+  .hud-chip {
+    padding: 5px 9px;
+    font-size: 0.74rem;
+    letter-spacing: 0.06em;
+  }
+  .speed-hud { left: 10px; bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); width: 178px; padding: 12px; }
+  .speed-main { font-size: 2.35rem; }
+  .timer-hud { right: 10px; top: calc(env(safe-area-inset-top, 0px) + 112px); width: 188px; padding: 10px; gap: 6px; }
+  .timer-hud strong { font-size: 0.9rem; }
+  .timer-hud label { font-size: 0.66rem; }
+  .minimap-shell { right: 10px; bottom: calc(env(safe-area-inset-bottom, 0px) + 12px); width: 142px; height: 142px; }
+  .status-strip {
+    top: calc(env(safe-area-inset-top, 0px) + 86px);
+    font-size: 0.62rem;
+    max-width: calc(100vw - 20px);
+    gap: 6px;
+    padding: 6px 10px;
+  }
+  .event-banner {
+    top: calc(env(safe-area-inset-top, 0px) + 132px);
+    font-size: 0.65rem;
+    padding: 6px 12px;
+  }
+  .controls-strip { bottom: calc(env(safe-area-inset-bottom, 0px) + 6px); font-size: 0.62rem; max-width: 94vw; }
   .career-strip,
   .finish-career-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -525,9 +552,41 @@
 @media (max-width: 640px) {
   .menu-controls { grid-template-columns: 1fr; }
   .menu-actions { flex-wrap: wrap; }
-  .timer-hud { top: 118px; right: 12px; width: calc(100vw - 24px); max-width: 320px; }
-  .speed-hud { width: 160px; }
-  .status-strip { top: 92px; }
+  .top-hud {
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+  .top-hud-left,
+  .top-hud-right {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .hud-chip {
+    text-align: center;
+    font-size: 0.7rem;
+    padding: 6px 5px;
+  }
+  .status-strip {
+    top: calc(env(safe-area-inset-top, 0px) + 132px);
+    width: calc(100vw - 20px);
+    border-radius: 14px;
+    justify-content: space-between;
+  }
+  .timer-hud {
+    top: calc(env(safe-area-inset-top, 0px) + 196px);
+    right: 10px;
+    width: calc(100vw - 20px);
+    max-width: none;
+  }
+  .timer-hud .sectors {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .timer-hud .sectors span { text-align: center; }
+  .speed-hud { width: 152px; }
+  .minimap-shell { width: 122px; height: 122px; }
   .career-strip,
   .finish-career-grid { grid-template-columns: 1fr; }
 }
@@ -600,12 +659,14 @@
 .touch-controls {
   display: none;
   position: absolute;
-  bottom: 60px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 68px);
   left: 0;
   right: 0;
-  padding: 0 16px;
+  padding: 0 12px;
   pointer-events: none;
   z-index: 10;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .touch-left, .touch-right {
@@ -619,8 +680,8 @@
 .touch-extras { position: absolute; right: 16px; bottom: 90px; display: flex; gap: 8px; pointer-events: auto; }
 
 .touch-btn {
-  width: 64px;
-  height: 64px;
+  width: 58px;
+  height: 58px;
   border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.3);
   background: rgba(8, 16, 30, 0.65);
@@ -644,7 +705,7 @@
 .touch-gas { background: rgba(30, 120, 60, 0.5); }
 .touch-brake { background: rgba(180, 40, 40, 0.5); }
 .touch-steer-l, .touch-steer-r { font-size: 1.4rem; }
-.touch-sm { width: 50px; height: 50px; font-size: 0.62rem; }
+.touch-sm { width: 46px; height: 46px; font-size: 0.58rem; }
 
 @media (pointer: coarse), (max-width: 1024px) and (hover: none) {
   .touch-controls { display: block; }
