@@ -1,95 +1,54 @@
-<div align="center">
-  <h1>🏎️ React F1 Game</h1>
-  <p><strong>A fully playable 3D Formula 1 racing game built entirely in the browser using React and Three.js.</strong></p>
-  
-  <p>
-    <a href="https://agentzz1.github.io/f1-racer"><strong>🎮 PLAY THE DEMO HERE!</strong></a>
-  </p>
+# F1 Racer
 
-  <p>
-    <a href="#features">Features</a> •
-    <a href="#quick-start">Quick Start</a> •
-    <a href="#controls">Controls</a> •
-    <a href="#architecture">Architecture</a>
-  </p>
+F1 Racer is a browser-based Formula 1 game built with React and Three.js. The project focuses on fast local iteration, custom 3D gameplay systems, and a polished racing experience without relying on a heavyweight game engine.
 
-  <img src="https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" />
-  <img src="https://img.shields.io/badge/ThreeJs-black?style=for-the-badge&logo=three.js&logoColor=white" />
-  <img src="https://img.shields.io/badge/WebGL-990000?style=for-the-badge&logo=webgl&logoColor=white" />
-</div>
+## Demo
 
----
+Play the demo here:
 
-> 🚀 **Want a taste of the speed?** Test your driving skills against 7 AI opponents with dynamic weather, proper physics, DRS, ERS, and realistic tire wear. All running locally in your browser!
+https://agentzz1.github.io/f1-racer
 
-![Gameplay Demo](/public/img/demo.gif)
+## Highlights
 
-## ✨ Features
+- 3D racing in the browser with a custom gameplay loop
+- Multiple AI opponents with overtaking and racing-line behavior
+- Dynamic weather conditions and track-state changes
+- ERS, DRS, camera switching, and a live race HUD
+- Web Audio-based vehicle and environment sound design
 
-- **🏎️ Proper Racing Physics:** Features realistic acceleration curves, drafting, drifting, sparks, and collisions.
-- **🤖 7 Dynamic AI Opponents:** AI racers have different aggression levels, take racing lines, and pass intelligently.
-- **🌧️ Dynamic Weather System:** Race in Clear, Overcast, or Storm conditions with realistic slippery tracks and rain effects.
-- **🔋 Energy Recovery System (ERS) & DRS:** Manage your battery and use DRS zones to overtake opponents.
-- **🚀 Web Audio Synthesis:** Engine RPM, tire screeching, and wind noise are procedurally generated directly in the browser via the Web Audio API!
-- **📹 Dynamic Cameras:** Switch between Chase, Cockpit, and Broadcast TV cameras.
-- **📊 Live HUD:** Real-time minimap, speedometer, tachometer, lap timer, and position tracker.
+## Controls
 
-## 🚀 Quick Start
+| Action | Key |
+| --- | --- |
+| Accelerate | `W` or `Up Arrow` |
+| Brake / Reverse | `S` or `Down Arrow` |
+| Steer Left | `A` or `Left Arrow` |
+| Steer Right | `D` or `Right Arrow` |
+| Use ERS | `Shift` |
+| Change Camera | `C` |
 
-Want to run it locally or tweak the physics? It takes less than a minute.
+## Tech Stack
 
-**1. Clone the repository**
+- React 19
+- Three.js
+- Custom browser-side racing logic and physics systems
+- Web Audio API for synthesized sound effects
+
+## Local Development
+
 ```bash
 git clone https://github.com/agentzz1/f1-racer.git
 cd f1-racer
-```
-
-**2. Install dependencies**
-```bash
 npm install
-```
-
-**3. Start the dev server**
-```bash
 npm start
 ```
-The game will instantly open in your browser at `http://localhost:3000`.
 
-## 🎮 Controls
+The development server starts on `http://localhost:3000`.
 
-| Action | Key |
-| :--- | :--- |
-| **Accelerate** | `W` or `Up Arrow` |
-| **Brake/Reverse** | `S` or `Down Arrow` |
-| **Steer Left** | `A` or `Left Arrow` |
-| **Steer Right** | `D` or `Right Arrow` |
-| **Use ERS (Boost)** | `Shift` (Hold) |
-| **Change Camera** | `C` |
+## Project Focus
 
->*Tip: Don't hold accelerate through sharp corners! You will drift and ruin your lap time.*
+This repository is primarily a gameplay and rendering experiment. The codebase is optimized for rapid iteration on browser-native 3D systems, race mechanics, and interface polish.
 
-## 🏗️ Architecture Stack
+## License
 
-This project is built from scratch to push the limits of what's possible in a browser tab without heavy game engines like Unity or Unreal.
-
-- **Frontend Framework:** `React 19`
-- **3D Rendering Engine:** `Three.js`
-- **Physics Engine:** Custom rigid-body simulation built in Javascript
-- **Sound:** Native `Web Audio API` (Oscillators and gain nodes, no static `.mp3` engine loops!)
-- **Assets:** Highly optimized `.glb` 3D models
-
-## 🤝 Contributing
-
-Contributions are always welcome! If you want to add new tracks, tuning options, or multiplayer:
-1. Fork the Project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the Branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## 📜 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
-
----
-⭐ **If you enjoyed playing or poking around the code, please drop a star!** ⭐
+MIT

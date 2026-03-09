@@ -4,6 +4,9 @@ build_prev_*
 build.log
 build_log.txt
 package-lock.json
+output/
+progress.md
+web-game-actions.json
 
 # Environment
 .env
