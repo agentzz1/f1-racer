@@ -1,6 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
+import TouchControlButton from './TouchControlButton';
+import {
+  analyzeSetup,
+  buildEngineerBrief,
+  DEFAULT_SETTINGS,
+  DEFAULT_SETUP_ANALYSIS,
+  DRIVER_PRESETS,
+  loadCareerStats,
+  loadSettings
+} from './setupProfiles';
 import './index.css';
 
 const TOTAL_LAPS = 5;
@@ -13,30 +23,20 @@ const WEATHER_PRESETS = [
   { name: 'STORM', rain: 0.75, fog: 0.0038, sun: 0.52, ambient: 0.26, top: '#0c1220', mid: '#1d2c3d', bot: '#45576c' }
 ];
 
+const SETTING_CONTROLS = [
+  { key: 'maxSpeed', label: 'Top Speed', min: 220, max: 360, step: 5, format: (value) => `${value} km/h` },
+  { key: 'acceleration', label: 'Acceleration', min: 30, max: 100, step: 1, format: (value) => `${value}%` },
+  { key: 'steering', label: 'Steering Response', min: 25, max: 100, step: 1, format: (value) => `${value}%` },
+  { key: 'brakePower', label: 'Brake Power', min: 30, max: 100, step: 1, format: (value) => `${value}%` },
+  { key: 'aiLevel', label: 'AI Difficulty', min: 25, max: 100, step: 1, format: (value) => `${value}%` }
+];
+
 const TRACK_POINTS = [
   [0, 0, 0], [80, 0, 0], [110, 6, -20], [130, 12, -50], [140, 15, -80], [130, 12, -110], [140, 8, -140],
   [160, 4, -160], [200, 2, -170], [250, 0, -175], [280, -2, -160], [290, -4, -130], [280, -4, -90],
   [260, -2, -60], [240, 0, -40], [200, 2, -30], [160, 4, -20], [120, 2, 20], [80, 0, 40], [40, 0, 50],
   [0, 0, 55], [-40, -2, 50], [-60, -2, 35], [-50, -2, 10], [-25, -1, 0]
 ];
-
-const DEFAULT_SETTINGS = {
-  maxSpeed: 320,
-  acceleration: 68,
-  steering: 58,
-  brakePower: 70,
-  aiLevel: 62
-};
-
-const DEFAULT_CAREER_STATS = {
-  races: 0,
-  wins: 0,
-  podiums: 0,
-  bestLap: null,
-  lastPosition: null,
-  lastWeather: 'CLEAR',
-  recentResults: []
-};
 
 const QUALITY_PRESETS = {
   low: {
@@ -91,6 +91,33 @@ const QUALITY_PRESETS = {
     grassAnisotropy: 4,
     wheelSegments: 12,
     shadowUpdateInterval: 0.18,
+    useDetailedCarModel: false
+  },
+  high: {
+    label: 'SHOWCAR',
+    antialias: true,
+    maxPixelRatio: 1.2,
+    minPixelRatio: 0.95,
+    logarithmicDepthBuffer: false,
+    shadowMapEnabled: true,
+    shadowMapSize: 1536,
+    rainCount: 880,
+    rainUpdateInterval: 0.025,
+    skyResolution: 768,
+    skySegments: 40,
+    skyUpdateInterval: 0.12,
+    minimapInterval: 0.12,
+    minimapSize: 220,
+    groundSegments: 260,
+    trackSamples: 720,
+    terrainCheckStep: 4,
+    treeCount: 1450,
+    barrierStep: 2,
+    smokeCount: 112,
+    sparkCount: 80,
+    grassAnisotropy: 8,
+    wheelSegments: 14,
+    shadowUpdateInterval: 0.12,
     useDetailedCarModel: true
   }
 };
@@ -103,6 +130,9 @@ const detectQualityPreset = () => {
   const smallViewport = window.innerWidth < 1180 || window.innerHeight < 720;
   const reducedMotion = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (cores <= 6 || memory <= 6 || dpr > 1.5 || smallViewport || reducedMotion) return QUALITY_PRESETS.low;
+  if (cores >= 10 && memory >= 8 && dpr <= 1.3 && window.innerWidth >= 1440 && window.innerHeight >= 860) {
+    return QUALITY_PRESETS.high;
+  }
   return QUALITY_PRESETS.medium;
 };
 
@@ -123,44 +153,13 @@ const formatTime = (seconds) => {
 
 const inDrsZone = (t) => DRS_ZONES.some(([a, b]) => t >= a && t <= b);
 
-const loadSettings = () => {
-  try {
-    const raw = localStorage.getItem('f1-pro-settings');
-    if (!raw) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(raw);
-    return {
-      maxSpeed: clamp(Number(parsed.maxSpeed) || DEFAULT_SETTINGS.maxSpeed, 220, 360),
-      acceleration: clamp(Number(parsed.acceleration) || DEFAULT_SETTINGS.acceleration, 30, 100),
-      steering: clamp(Number(parsed.steering) || DEFAULT_SETTINGS.steering, 25, 100),
-      brakePower: clamp(Number(parsed.brakePower) || DEFAULT_SETTINGS.brakePower, 30, 100),
-      aiLevel: clamp(Number(parsed.aiLevel) || DEFAULT_SETTINGS.aiLevel, 25, 100)
-    };
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
-};
-
-const loadCareerStats = () => {
-  try {
-    const raw = localStorage.getItem('f1-pro-career');
-    if (!raw) return DEFAULT_CAREER_STATS;
-    const parsed = JSON.parse(raw);
-    return {
-      races: Math.max(0, Number(parsed.races) || 0),
-      wins: Math.max(0, Number(parsed.wins) || 0),
-      podiums: Math.max(0, Number(parsed.podiums) || 0),
-      bestLap: Number.isFinite(parsed.bestLap) ? parsed.bestLap : null,
-      lastPosition: Number.isFinite(parsed.lastPosition) ? parsed.lastPosition : null,
-      lastWeather: typeof parsed.lastWeather === 'string' ? parsed.lastWeather : 'CLEAR',
-      recentResults: Array.isArray(parsed.recentResults)
-        ? parsed.recentResults
-          .filter((entry) => entry && Number.isFinite(entry.position) && Number.isFinite(entry.total))
-          .slice(0, 4)
-        : []
-    };
-  } catch {
-    return DEFAULT_CAREER_STATS;
-  }
+const paintSkyGlow = (ctx, x, y, weather) => {
+  const glow = ctx.createRadialGradient(x, y, 0, x, y, 220);
+  glow.addColorStop(0, `rgba(255,220,150,${0.9 - weather.rain * 0.5})`);
+  glow.addColorStop(0.35, `rgba(255,150,80,${0.35 - weather.rain * 0.2})`);
+  glow.addColorStop(1, 'rgba(255,120,50,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(x - 220, y - 220, 440, 440);
 };
 
 const paintSky = (ctx, w, h, weather, sunPhase) => {
@@ -173,17 +172,158 @@ const paintSky = (ctx, w, h, weather, sunPhase) => {
 
   const sx = w * (0.2 + 0.6 * sunPhase);
   const sy = h * (0.55 - 0.3 * Math.sin(sunPhase * Math.PI));
-  const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, 220);
-  glow.addColorStop(0, `rgba(255,220,150,${0.9 - weather.rain * 0.5})`);
-  glow.addColorStop(0.35, `rgba(255,150,80,${0.35 - weather.rain * 0.2})`);
-  glow.addColorStop(1, 'rgba(255,120,50,0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, w, h);
+  paintSkyGlow(ctx, sx - w, sy, weather);
+  paintSkyGlow(ctx, sx, sy, weather);
+  paintSkyGlow(ctx, sx + w, sy, weather);
+
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 5; i += 1) {
+    const cloudY = h * (0.18 + i * 0.12) + Math.sin((sunPhase + i * 0.15) * Math.PI * 2) * 6;
+    const alpha = Math.max(0.035, 0.075 - weather.rain * 0.04 - i * 0.008);
+    ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+    ctx.lineWidth = 16 - i * 1.8;
+    ctx.beginPath();
+    ctx.moveTo(-20, cloudY);
+    ctx.bezierCurveTo(w * 0.18, cloudY - 18, w * 0.42, cloudY + 12, w * 0.65, cloudY - 6);
+    ctx.bezierCurveTo(w * 0.82, cloudY - 16, w * 0.94, cloudY + 8, w + 20, cloudY - 4);
+    ctx.stroke();
+  }
+};
+
+let detailedCarTemplatePromise = null;
+
+const loadDetailedCarTemplate = () => {
+  if (!detailedCarTemplatePromise) {
+    const loader = new GLTFLoader();
+    detailedCarTemplatePromise = loader.loadAsync(`${process.env.PUBLIC_URL}/redbull.glb`)
+      .then((gltf) => gltf.scene)
+      .catch((error) => {
+        detailedCarTemplatePromise = null;
+        throw error;
+      });
+  }
+  return detailedCarTemplatePromise;
+};
+
+const cloneDetailedCar = (template, shadowMapEnabled) => {
+  const model = template.clone(true);
+  const allowDetailedCarShadows = shadowMapEnabled && false;
+  model.traverse((obj) => {
+    if (obj.isMesh) {
+      obj.geometry = obj.geometry.clone();
+      obj.material = Array.isArray(obj.material)
+        ? obj.material.map((material) => material.clone())
+        : obj.material.clone();
+      const materialList = Array.isArray(obj.material) ? obj.material : [obj.material];
+      materialList.forEach((material) => {
+        if (material.map) {
+          material.map.colorSpace = THREE.SRGBColorSpace;
+          material.map.anisotropy = Math.min(material.map.anisotropy || 1, 2);
+        }
+        if (material.normalMap) {
+          material.normalMap.anisotropy = Math.min(material.normalMap.anisotropy || 1, 1);
+        }
+      });
+      obj.castShadow = allowDetailedCarShadows;
+      obj.receiveShadow = allowDetailedCarShadows;
+      obj.frustumCulled = true;
+    }
+  });
+  return model;
+};
+
+// ── Audio Engine ──
+let audioCtx = null;
+let engineOsc = null;
+let engineGain = null;
+let windGain = null;
+let windNoise = null;
+let audioEnabled = false;
+
+const initAudio = () => {
+  if (audioCtx) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // Engine oscillator
+    engineOsc = audioCtx.createOscillator();
+    engineOsc.type = 'sawtooth';
+    engineOsc.frequency.value = 80;
+    engineGain = audioCtx.createGain();
+    engineGain.gain.value = 0;
+    const engineFilter = audioCtx.createBiquadFilter();
+    engineFilter.type = 'lowpass';
+    engineFilter.frequency.value = 400;
+    engineOsc.connect(engineFilter);
+    engineFilter.connect(engineGain);
+    engineGain.connect(audioCtx.destination);
+    engineOsc.start();
+    // Wind noise
+    const bufferSize = audioCtx.sampleRate * 2;
+    const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+    windNoise = audioCtx.createBufferSource();
+    windNoise.buffer = noiseBuffer;
+    windNoise.loop = true;
+    const windFilter = audioCtx.createBiquadFilter();
+    windFilter.type = 'bandpass';
+    windFilter.frequency.value = 800;
+    windFilter.Q.value = 0.5;
+    windGain = audioCtx.createGain();
+    windGain.gain.value = 0;
+    windNoise.connect(windFilter);
+    windFilter.connect(windGain);
+    windGain.connect(audioCtx.destination);
+    windNoise.start();
+    audioEnabled = true;
+  } catch (e) { audioEnabled = false; }
+};
+
+const updateEngineSound = (kmh, rpm, throttle) => {
+  if (!audioEnabled || !engineOsc) return;
+  const t = performance.now() * 0.001;
+  engineOsc.frequency.value = 55 + rpm * 0.006 + Math.sin(t * 30) * (throttle ? 3 : 1);
+  engineGain.gain.value = Math.min(0.06, 0.005 + throttle * 0.055);
+  if (windGain) windGain.gain.value = Math.min(0.03, kmh * 0.00015);
+};
+
+const playCollisionSound = () => {
+  if (!audioEnabled || !audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.value = 120;
+  g.gain.setValueAtTime(0.08, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+  osc.connect(g);
+  g.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.15);
+};
+
+const playGearShiftSound = () => {
+  if (!audioEnabled || !audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.frequency.value = 300;
+  g.gain.setValueAtTime(0.04, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+  osc.connect(g);
+  g.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.08);
+};
+
+const stopAudio = () => {
+  if (engineGain) engineGain.gain.value = 0;
+  if (windGain) windGain.gain.value = 0;
 };
 
 export default function F1RacingGame() {
   const containerRef = useRef(null);
   const minimapRef = useRef(null);
+  const soundEnabledRef = useRef(false);
   const debugStateRef = useRef({
     coordinateSystem: 'trackProgress is 0..1 around the circuit; lateralOffsetMeters is signed from centerline (+left, -right).',
     phase: 'menu',
@@ -196,6 +336,7 @@ export default function F1RacingGame() {
 
   const [settings, setSettings] = useState(loadSettings);
   const settingsRef = useRef(settings);
+  const setupAnalysisRef = useRef(DEFAULT_SETUP_ANALYSIS);
 
   const [careerStats, setCareerStats] = useState(loadCareerStats);
   const careerStatsRef = useRef(careerStats);
@@ -203,10 +344,13 @@ export default function F1RacingGame() {
   const [phase, setPhase] = useState('menu');
   const phaseRef = useRef(phase);
 
+  const [soundOn, setSoundOn] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [countdown, setCountdown] = useState(null);
   const [sessionId, setSessionId] = useState(0);
   const [result, setResult] = useState(null);
+  const setupAnalysis = analyzeSetup(settings);
+  const engineerBrief = buildEngineerBrief(setupAnalysis, careerStats);
 
   const [hud, setHud] = useState({
     speed: 0,
@@ -231,31 +375,21 @@ export default function F1RacingGame() {
     offTrack: false,
     message: '',
     fps: 60,
-    tireTemp: 82
+    flow: 0,
+    profile: DEFAULT_SETUP_ANALYSIS.preset.shortLabel
   });
 
+  const prevThrottleRef = useRef(false);
   const keysRef = useRef({ up: false, down: false, left: false, right: false, drift: false, drs: false, ers: false, repair: false });
-  const tiltSteerRef = useRef(0);
-  const [tiltEnabled, setTiltEnabled] = useState(false);
-  const tiltEnabledRef = useRef(false);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const onOrientation = (event) => {
-      if (!tiltEnabledRef.current) return;
-      const gamma = Number(event.gamma);
-      if (!Number.isFinite(gamma)) return;
-      const normalized = clamp(gamma / 32, -1, 1);
-      const deadZone = 0.08;
-      const shaped = Math.abs(normalized) < deadZone ? 0 : normalized;
-      tiltSteerRef.current = shaped;
-    };
-    window.addEventListener('deviceorientation', onOrientation);
-    return () => window.removeEventListener('deviceorientation', onOrientation);
-  }, [tiltEnabled]);
+  const clearInputs = () => {
+    Object.keys(keysRef.current).forEach((key) => {
+      keysRef.current[key] = false;
+    });
+  };
 
   useEffect(() => {
     settingsRef.current = settings;
+    setupAnalysisRef.current = analyzeSetup(settings);
     localStorage.setItem('f1-pro-settings', JSON.stringify(settings));
   }, [settings]);
 
@@ -269,16 +403,20 @@ export default function F1RacingGame() {
   }, [phase]);
 
   useEffect(() => {
-    tiltEnabledRef.current = tiltEnabled;
-  }, [tiltEnabled]);
-
-  useEffect(() => {
+    const analysis = analyzeSetup(settings);
     debugStateRef.current = {
       ...debugStateRef.current,
       phase,
       countdown,
       quality: {
         preset: detectQualityPreset().label
+      },
+      setup: {
+        profile: analysis.preset.name,
+        matchPct: analysis.matchPct,
+        attack: analysis.metrics.attack,
+        precision: analysis.metrics.precision,
+        tyreCare: analysis.metrics.tyreCare
       },
       career: {
         races: careerStats.races,
@@ -294,7 +432,7 @@ export default function F1RacingGame() {
         isNewBestLap: Boolean(result.isNewBestLap)
       } : null
     };
-  }, [phase, countdown, result, careerStats]);
+  }, [phase, countdown, result, careerStats, settings]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -305,6 +443,7 @@ export default function F1RacingGame() {
   }, []);
 
   const resetHud = () => {
+    const nextSetup = setupAnalysisRef.current;
     setHud((prev) => ({
       ...prev,
       speed: 0,
@@ -328,11 +467,13 @@ export default function F1RacingGame() {
       offTrack: false,
       message: '',
       fps: 60,
-      tireTemp: 82
+      flow: 0,
+      profile: nextSetup.preset.shortLabel
     }));
   };
 
   const startRace = () => {
+    clearInputs();
     resetHud();
     setResult(null);
     setShowSettings(false);
@@ -342,6 +483,7 @@ export default function F1RacingGame() {
   };
 
   const restartRace = () => {
+    clearInputs();
     resetHud();
     setResult(null);
     setCountdown(3);
@@ -350,6 +492,7 @@ export default function F1RacingGame() {
   };
 
   const backToMenu = () => {
+    clearInputs();
     setPhase('menu');
     setResult(null);
     setCountdown(null);
@@ -360,6 +503,7 @@ export default function F1RacingGame() {
     if (!containerRef.current || phaseRef.current === 'menu') return undefined;
 
     const container = containerRef.current;
+    let cancelled = false;
     container.innerHTML = '';
     const quality = detectQualityPreset();
 
@@ -407,6 +551,8 @@ export default function F1RacingGame() {
     const skyCtx = skyCanvas.getContext('2d');
     paintSky(skyCtx, quality.skyResolution, quality.skyResolution, WEATHER_PRESETS[0], 0.3);
     const skyTexture = new THREE.CanvasTexture(skyCanvas);
+    skyTexture.wrapS = THREE.RepeatWrapping;
+    skyTexture.colorSpace = THREE.SRGBColorSpace;
     const sky = new THREE.Mesh(
       new THREE.SphereGeometry(1300, quality.skySegments, quality.skySegments),
       new THREE.MeshBasicMaterial({ map: skyTexture, side: THREE.BackSide, fog: false })
@@ -556,6 +702,37 @@ export default function F1RacingGame() {
       roughness: 0.8,
       metalness: 0.1,
     });
+    const runoffVertices = [];
+    const runoffUV = [];
+    const runoffIndices = [];
+    const runoffHalfWidth = TRACK_WIDTH * 0.82;
+    for (let i = 0; i < samples; i += 1) {
+      const p = points[i];
+      const n = normals[i];
+      const l = p.clone().addScaledVector(n, runoffHalfWidth);
+      const r = p.clone().addScaledVector(n, -runoffHalfWidth);
+      runoffVertices.push(l.x, l.y + 0.018, l.z, r.x, r.y + 0.018, r.z);
+      runoffUV.push(0, (i / samples) * 24, 1, (i / samples) * 24);
+      const base = i * 2;
+      const nxt = ((i + 1) % samples) * 2;
+      runoffIndices.push(base, nxt, base + 1, base + 1, nxt, nxt + 1);
+    }
+    const runoffGeo = new THREE.BufferGeometry();
+    runoffGeo.setAttribute('position', new THREE.Float32BufferAttribute(runoffVertices, 3));
+    runoffGeo.setAttribute('uv', new THREE.Float32BufferAttribute(runoffUV, 2));
+    runoffGeo.setIndex(runoffIndices);
+    runoffGeo.computeVertexNormals();
+    const runoff = new THREE.Mesh(
+      runoffGeo,
+      new THREE.MeshStandardMaterial({
+        map: asphaltTex,
+        color: 0x69717b,
+        roughness: 0.92,
+        metalness: 0.04
+      })
+    );
+    runoff.receiveShadow = quality.shadowMapEnabled;
+    scene.add(runoff);
     const road = new THREE.Mesh(roadGeo, roadMat);
     road.receiveShadow = quality.shadowMapEnabled;
     scene.add(road);
@@ -648,7 +825,7 @@ export default function F1RacingGame() {
         curbVerts.push(cl.x, cl.y + 0.06, cl.z, cr.x, cr.y + 0.08, cr.z);
 
         // Alternating color based on segment index (Yellow and Red for Spa style)
-        const color = (i % 4 < 2) ? [0.86, 0.72, 0.11] : [0.8, 0.1, 0.1];
+        const color = (i % 4 < 2) ? [0.95, 0.95, 0.95] : [0.83, 0.12, 0.12];
         curbColors.push(...color, ...color);
 
         if (curIdx > 0 && i > 0 && curvatures[i - 1] > 0.45) {
@@ -913,58 +1090,272 @@ export default function F1RacingGame() {
     let shakeIntensity = 0;
     let shakeDecay = 0;
 
-    const player = new THREE.Group();
-    const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.4, 4.8), new THREE.MeshStandardMaterial({ color: 0xd8141f, metalness: 0.85, roughness: 0.18 }));
-    body.position.y = 0.35;
-    body.castShadow = quality.shadowMapEnabled;
-    player.add(body);
+    // ── F1 Car Builder ──
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.5, roughness: 0.6 });
+    const tireMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.95 });
+    const rimMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.9, roughness: 0.15 });
+    const wingMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.6, roughness: 0.3 });
+    const haloMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.8, roughness: 0.2 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x112244, metalness: 0.9, roughness: 0.05, transparent: true, opacity: 0.6 });
 
-    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.42, 2.2, 10), body.material);
-    nose.rotation.x = Math.PI / 2;
-    nose.position.set(0, 0.33, 3.4);
-    player.add(nose);
+    const buildF1Car = (color, shadowEnabled) => {
+      const car = new THREE.Group();
+      const bodyMat = new THREE.MeshStandardMaterial({ color, metalness: 0.85, roughness: 0.15 });
+      const accentMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.7, roughness: 0.2 });
 
-    const wheels = [];
-    const wheelPos = [[-1.0, 0.35, 2.2], [1.0, 0.35, 2.2], [-1.05, 0.38, -1.5], [1.05, 0.38, -1.5]];
-    wheelPos.forEach((p) => {
-      const w = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.3, quality.wheelSegments), new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.9 }));
-      w.rotation.z = Math.PI / 2;
-      w.castShadow = quality.shadowMapEnabled;
-      w.position.set(p[0], p[1], p[2]);
-      player.add(w);
-      wheels.push(w);
-    });
+      // ── Front Chassis (narrow tub between nose and cockpit) ──
+      const frontTub = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 1.0), bodyMat);
+      frontTub.position.set(0, 0.2, 1.2);
+      frontTub.castShadow = shadowEnabled;
+      car.add(frontTub);
 
-    const flap = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.05, 0.25), new THREE.MeshStandardMaterial({ color: 0x1f2329 }));
-    flap.position.set(0, 1.15, -2.1);
-    player.add(flap);
+      // ── Cockpit Section (slightly wider, holds driver) ──
+      const cockpit = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 0.8), bodyMat);
+      cockpit.position.set(0, 0.22, 0.3);
+      cockpit.castShadow = shadowEnabled;
+      car.add(cockpit);
 
-    if (quality.useDetailedCarModel) {
-      const loader = new GLTFLoader();
-      loader.load(
-        `${process.env.PUBLIC_URL}/redbull.glb`,
-        (gltf) => {
-          const model = gltf.scene;
-          model.scale.set(3.45, 3.45, 3.45);
-          model.rotation.y = -Math.PI / 2;
-          model.position.set(0, 0.05, -0.5);
-          model.traverse((obj) => {
-            if (obj.isMesh) {
-              obj.castShadow = quality.shadowMapEnabled;
-              obj.receiveShadow = quality.shadowMapEnabled;
-            }
-          });
-          body.visible = false;
-          nose.visible = false;
-          wheels.forEach((w) => { w.visible = false; });
-          flap.visible = false;
-          player.add(model);
-        },
-        undefined,
-        () => { }
-      );
-    }
+      // ── Rear Chassis (behind driver, connects to engine) ──
+      const rearChassis = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.12, 0.6), bodyMat);
+      rearChassis.position.set(0, 0.2, -0.5);
+      rearChassis.castShadow = shadowEnabled;
+      car.add(rearChassis);
 
+      // ── Engine Cover (slim, tapered top) ──
+      const engineTop = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.15, 1.0), bodyMat);
+      engineTop.position.set(0, 0.3, -1.3);
+      engineTop.castShadow = shadowEnabled;
+      car.add(engineTop);
+
+      // Engine rear taper
+      const engineRear = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.1, 0.4), bodyMat);
+      engineRear.position.set(0, 0.28, -2.0);
+      car.add(engineRear);
+
+      // Shark fin (very thin)
+      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.22, 0.5), bodyMat);
+      fin.position.set(0, 0.48, -1.2);
+      fin.castShadow = shadowEnabled;
+      car.add(fin);
+
+      // ── Nose (4 tapered steps) ──
+      const nose1 = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.08, 0.6), bodyMat);
+      nose1.position.set(0, 0.22, 1.9);
+      nose1.castShadow = shadowEnabled;
+      car.add(nose1);
+
+      const nose2 = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.07, 0.5), bodyMat);
+      nose2.position.set(0, 0.21, 2.4);
+      nose2.castShadow = shadowEnabled;
+      car.add(nose2);
+
+      const nose3 = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.06, 0.4), bodyMat);
+      nose3.position.set(0, 0.2, 2.8);
+      car.add(nose3);
+
+      const nose4 = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.05, 0.2), bodyMat);
+      nose4.position.set(0, 0.2, 3.1);
+      car.add(nose4);
+
+      const tip = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 4), bodyMat);
+      tip.position.set(0, 0.2, 3.22);
+      car.add(tip);
+
+      // ── Sidepods (separate from body, attached to sides) ──
+      [-0.35, 0.35].forEach(x => {
+        const sp = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.12, 0.8), bodyMat);
+        sp.position.set(x, 0.25, -0.2);
+        sp.castShadow = shadowEnabled;
+        car.add(sp);
+
+        // Intake scoop
+        const intake = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.04), darkMat);
+        intake.position.set(x, 0.32, 0.2);
+        car.add(intake);
+
+        // Radiator outlet
+        const outlet = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.06, 0.03), darkMat);
+        outlet.position.set(x, 0.28, -0.6);
+        car.add(outlet);
+      });
+
+      // ── Rear Wing ──
+      const rwMainGeo = new THREE.BoxGeometry(1.0, 0.02, 0.22);
+      const rwMain = new THREE.Mesh(rwMainGeo, wingMat);
+      rwMain.position.set(0, 0.78, -2.1);
+      rwMain.rotation.x = 0.2;
+      rwMain.castShadow = shadowEnabled;
+      car.add(rwMain);
+
+      // DRS flap
+      const drsGeo = new THREE.BoxGeometry(0.95, 0.015, 0.16);
+      const drsMesh = new THREE.Mesh(drsGeo, wingMat);
+      drsMesh.position.set(0, 0.84, -2.02);
+      drsMesh.rotation.x = 0.1;
+      drsMesh.castShadow = shadowEnabled;
+      car.add(drsMesh);
+      car.userData.drsFlap = drsMesh;
+
+      // Rear wing endplates
+      [-0.52, 0.52].forEach(x => {
+        const ep = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.18, 0.28), darkMat);
+        ep.position.set(x, 0.72, -2.1);
+        ep.castShadow = shadowEnabled;
+        car.add(ep);
+      });
+
+      // Rear wing pillars
+      [-0.3, 0.3].forEach(x => {
+        const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.35, 0.03), darkMat);
+        pillar.position.set(x, 0.55, -2.05);
+        car.add(pillar);
+      });
+
+      // ── Sidepods (slim) ──
+      [-0.42, 0.42].forEach((x, si) => {
+        const spGeo = new THREE.BoxGeometry(0.12, 0.16, 1.0);
+        const sp = new THREE.Mesh(spGeo, bodyMat);
+        sp.position.set(x, 0.28, -0.4);
+        sp.castShadow = shadowEnabled;
+        car.add(sp);
+
+        const intakeGeo = new THREE.BoxGeometry(0.1, 0.12, 0.04);
+        const intake = new THREE.Mesh(intakeGeo, darkMat);
+        intake.position.set(x, 0.35, 0.1);
+        car.add(intake);
+      });
+
+      // ── Air Intake / Scope ──
+      const scopeGeo = new THREE.BoxGeometry(0.15, 0.1, 0.2);
+      const scope = new THREE.Mesh(scopeGeo, darkMat);
+      scope.position.set(0, 0.46, -0.7);
+      car.add(scope);
+
+      // ── Halo ──
+      const haloCurveGeo = new THREE.TorusGeometry(0.22, 0.02, 6, 12, Math.PI);
+      const haloCurve = new THREE.Mesh(haloCurveGeo, haloMat);
+      haloCurve.position.set(0, 0.46, 0.5);
+      haloCurve.rotation.z = Math.PI / 2;
+      haloCurve.rotation.y = Math.PI / 2;
+      car.add(haloCurve);
+
+      const haloUp = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.02, 0.22, 6), haloMat);
+      haloUp.position.set(0, 0.42, 0.7);
+      car.add(haloUp);
+
+      // ── Cockpit / Visor ──
+      const visorGeo = new THREE.SphereGeometry(0.15, 8, 6, 0, Math.PI * 2, 0, Math.PI * 0.5);
+      const visor = new THREE.Mesh(visorGeo, glassMat);
+      visor.position.set(0, 0.38, 0.4);
+      visor.scale.set(1, 0.5, 1.1);
+      car.add(visor);
+
+      // ── Driver Helmet ──
+      const helmetMat = new THREE.MeshStandardMaterial({ color, metalness: 0.3, roughness: 0.4 });
+      const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), helmetMat);
+      helmet.position.set(0, 0.44, 0.35);
+      helmet.scale.set(0.85, 0.6, 0.9);
+      car.add(helmet);
+
+      // ── Wheels ──
+      const wheelData = [
+        { x: -0.78, y: 0.28, z: 1.8, r: 0.28, w: 0.24, front: true },   // FL
+        { x: 0.78, y: 0.28, z: 1.8, r: 0.28, w: 0.24, front: true },     // FR
+        { x: -0.82, y: 0.30, z: -1.5, r: 0.31, w: 0.32, front: false }, // RL
+        { x: 0.82, y: 0.30, z: -1.5, r: 0.31, w: 0.32, front: false },  // RR
+      ];
+
+      const wheelMeshes = [];
+      wheelData.forEach(wd => {
+        const wg = new THREE.Group();
+
+        // Tire
+        const tireGeo = new THREE.CylinderGeometry(wd.r, wd.r, wd.w, quality.wheelSegments);
+        tireGeo.rotateZ(Math.PI / 2);
+        const tire = new THREE.Mesh(tireGeo, tireMat);
+        tire.castShadow = shadowEnabled;
+        wg.add(tire);
+
+        // Rim
+        const rimGeo = new THREE.CylinderGeometry(wd.r * 0.55, wd.r * 0.55, wd.w + 0.02, 8);
+        rimGeo.rotateZ(Math.PI / 2);
+        const rim = new THREE.Mesh(rimGeo, rimMat);
+        wg.add(rim);
+
+        // Rim spokes
+        for (let s = 0; s < 5; s++) {
+          const spokeGeo = new THREE.BoxGeometry(wd.r * 0.9, 0.02, 0.025);
+          const spoke = new THREE.Mesh(spokeGeo, rimMat);
+          spoke.rotation.x = (s / 5) * Math.PI;
+          wg.add(spoke);
+        }
+
+        // Brake disc (visible through spokes)
+        const discGeo = new THREE.CylinderGeometry(wd.r * 0.45, wd.r * 0.45, 0.04, 12);
+        discGeo.rotateZ(Math.PI / 2);
+        const discMat = new THREE.MeshStandardMaterial({ color: 0x666666, metalness: 0.8, roughness: 0.3 });
+        const disc = new THREE.Mesh(discGeo, discMat);
+        wg.add(disc);
+
+        // Wheel cover (front aero)
+        if (wd.front) {
+          const coverGeo = new THREE.CylinderGeometry(wd.r * 0.85, wd.r * 0.9, 0.04, quality.wheelSegments);
+          coverGeo.rotateZ(Math.PI / 2);
+          const cover = new THREE.Mesh(coverGeo, bodyMat);
+          cover.position.x = wd.x > 0 ? wd.w * 0.5 + 0.02 : -(wd.w * 0.5 + 0.02);
+          wg.add(cover);
+        }
+
+        wg.position.set(wd.x, wd.y, wd.z);
+        car.add(wg);
+        wheelMeshes.push(wg);
+      });
+
+      // ── Floor / Diffuser ──
+      const floorGeo = new THREE.BoxGeometry(1.4, 0.03, 4.2);
+      const floorMesh = new THREE.Mesh(floorGeo, accentMat);
+      floorMesh.position.set(0, 0.08, 0);
+      car.add(floorMesh);
+
+      // Diffuser
+      const diffGeo = new THREE.BoxGeometry(0.8, 0.15, 0.3);
+      const diff = new THREE.Mesh(diffGeo, accentMat);
+      diff.position.set(0, 0.12, -2.0);
+      car.add(diff);
+
+      // ── Bargeboards ──
+      [-0.38, 0.38].forEach(x => {
+        const bbGeo = new THREE.BoxGeometry(0.02, 0.18, 0.5);
+        const bb = new THREE.Mesh(bbGeo, accentMat);
+        bb.position.set(x, 0.22, 0.8);
+        car.add(bb);
+      });
+
+      // ── T-Cam ──
+      const tcMat = new THREE.MeshStandardMaterial({ color: 0xffcc00, metalness: 0.5, roughness: 0.3 });
+      const tc = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.03, 0.06), tcMat);
+      tc.position.set(0, 0.55, -1.1);
+      car.add(tc);
+
+      // ── Exhaust ──
+      const exhGeo = new THREE.CylinderGeometry(0.035, 0.045, 0.1, 8);
+      exhGeo.rotateX(Math.PI / 2);
+      const exhMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.9, roughness: 0.15 });
+      const exh = new THREE.Mesh(exhGeo, exhMat);
+      exh.position.set(0, 0.38, -2.3);
+      car.add(exh);
+
+      const fallbackShell = new THREE.Group();
+      while (car.children.length) {
+        fallbackShell.add(car.children[0]);
+      }
+      car.add(fallbackShell);
+      car.userData.fallbackShell = fallbackShell;
+      car.userData.wheels = wheelMeshes;
+      return car;
+    };
+
+    const player = buildF1Car(0xd8141f, quality.shadowMapEnabled);
     const startT = 0.015;
     player.position.copy(curve.getPointAt(startT));
     player.position.y += 0.03;
@@ -972,47 +1363,37 @@ export default function F1RacingGame() {
     player.rotation.y = heading;
     scene.add(player);
 
+    // Player wheels reference
+    const wheels = player.userData.wheels || [];
+
+    // Load detailed GLB model on top if available (medium+ quality)
+    if (quality.useDetailedCarModel) {
+      loadDetailedCarTemplate()
+        .then((template) => {
+          if (cancelled) return;
+          const model = cloneDetailedCar(template, quality.shadowMapEnabled);
+          model.scale.set(3.45, 3.45, 3.45);
+          model.rotation.y = -Math.PI / 2;
+          model.position.set(0, 0.05, -0.5);
+          if (player.userData.fallbackShell) {
+            player.userData.fallbackShell.visible = false;
+          }
+          player.add(model);
+        })
+        .catch(() => { });
+    }
+
     const npcDefs = [
-      { name: 'Mercedes', color: 0x0d81f2 },
-      { name: 'McLaren', color: 0xff8a00 },
-      { name: 'Aston', color: 0x18aa64 },
-      { name: 'Williams', color: 0x4a62de },
-      { name: 'Haas', color: 0xffffff },
-      { name: 'Alpine', color: 0xe42f90 }
+      { name: 'Mercedes', color: 0x00d2be },
+      { name: 'McLaren', color: 0xff8000 },
+      { name: 'Aston', color: 0x229971 },
+      { name: 'Williams', color: 0x3571d0 },
+      { name: 'Haas', color: 0xb6babd },
+      { name: 'Alpine', color: 0xff6bc6 }
     ];
 
     const npcs = npcDefs.map((def, i) => {
-      const car = new THREE.Group();
-      const npcMat = new THREE.MeshStandardMaterial({ color: def.color, metalness: 0.82, roughness: 0.2 });
-      // Body
-      const npcBody = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.35, 4.4), npcMat);
-      npcBody.position.y = 0.35;
-      npcBody.castShadow = quality.shadowMapEnabled;
-      car.add(npcBody);
-      // Nose cone
-      const npcNoseMesh = new THREE.Mesh(new THREE.ConeGeometry(0.36, 1.8, 8), npcMat);
-      npcNoseMesh.rotation.x = Math.PI / 2;
-      npcNoseMesh.position.set(0, 0.33, 3.0);
-      car.add(npcNoseMesh);
-      // Rear wing
-      const npcWing = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.04, 0.22), new THREE.MeshStandardMaterial({ color: 0x1f2329 }));
-      npcWing.position.set(0, 1.05, -1.9);
-      car.add(npcWing);
-      // Wheels
-      const npcWheelGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.26, quality.wheelSegments);
-      const npcWheelMat = new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.9 });
-      [[-0.9, 0.32, 1.9], [0.9, 0.32, 1.9], [-0.95, 0.34, -1.3], [0.95, 0.34, -1.3]].forEach(wp => {
-        const wm = new THREE.Mesh(npcWheelGeo, npcWheelMat);
-        wm.rotation.z = Math.PI / 2;
-        wm.castShadow = quality.shadowMapEnabled;
-        wm.position.set(wp[0], wp[1], wp[2]);
-        car.add(wm);
-      });
-      // Driver helmet
-      const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), npcMat);
-      helmet.position.set(0, 0.7, 0.4);
-      car.add(helmet);
-
+      const car = buildF1Car(def.color, quality.shadowMapEnabled);
       const t = (startT - 0.018 * (i + 1) + 1) % 1;
       car.position.copy(curve.getPointAt(t));
       car.position.y += 0.25;
@@ -1059,6 +1440,17 @@ export default function F1RacingGame() {
       minimapHost.innerHTML = '';
       minimapHost.appendChild(minimap);
     }
+    const hudDom = {
+      speed: document.getElementById('hud-speed'),
+      gear: document.getElementById('hud-gear'),
+      rpmFill: document.getElementById('hud-rpm-fill'),
+      rpmLabel: document.getElementById('hud-rpm-label'),
+      lapTime: document.getElementById('hud-lap-time'),
+      raceTime: document.getElementById('hud-race-time'),
+      position: document.getElementById('hud-pos'),
+      lap: document.getElementById('hud-lap'),
+      fps: document.getElementById('hud-fps')
+    };
     let minX = Infinity;
     let maxX = -Infinity;
     let minZ = Infinity;
@@ -1155,7 +1547,6 @@ export default function F1RacingGame() {
     let speed = 0;
     let steer = 0;
     let drift = 0;
-    let tireTemp = 82;
     let pT = startT;
     let prevT = startT;
     let lap = 1;
@@ -1168,6 +1559,8 @@ export default function F1RacingGame() {
     let lastCross = -999999;
     let ers = 100;
     let damage = 0;
+    let flowState = 0;
+    let peakFlow = 0;
     let weatherIdx = 0;
     let weatherTarget = 0;
     let weatherBlend = 1;
@@ -1313,6 +1706,7 @@ export default function F1RacingGame() {
       }
 
       const cfg = settingsRef.current;
+      const raceSetup = setupAnalysisRef.current;
       const maxSpeed = cfg.maxSpeed / 3.6;
       const acc = 9 + (cfg.acceleration / 100) * 22;
       const brk = 13 + (cfg.brakePower / 100) * 24;
@@ -1394,8 +1788,6 @@ export default function F1RacingGame() {
         const rpm = clamp(4000 + ((kmh - gearRanges[gear - 1]) / Math.max(1, gearRanges[gear] - gearRanges[gear - 1])) * 13500, 4000, 18000);
         const drsReady = inDrsZone(pT) && kmh > 135;
         const drsOn = racing && keys.drs && drsReady;
-        const ersOn = racing && keys.ers && ers > 1 && kmh > 60;
-        ers = ersOn ? clamp(ers - dt * 24, 0, 100) : clamp(ers + dt * 11, 0, 100);
 
         let slip = 0;
         const forward = tmpB.set(Math.sin(heading), 0, Math.cos(heading));
@@ -1409,18 +1801,31 @@ export default function F1RacingGame() {
           }
         });
 
-        if (racing) {
-          const baseGrip = clamp(1 - rainLevel * 0.28 - damage * 0.22, 0.45, 1);
-          const downforceGrip = clamp(kmh / 320, 0, 0.18);
-          const tireTempTarget = 78 + kmh * 0.22 + Math.abs(steer) * 26 + drift * 18;
-          tireTemp = lerp(tireTemp, tireTempTarget, clamp(dt * 0.55, 0, 1));
-          const tempDelta = Math.abs(tireTemp - 94);
-          const tempGripPenalty = clamp(tempDelta / 180, 0, 0.22);
-          const grip = clamp(baseGrip + downforceGrip - tempGripPenalty, 0.42, 1.08);
-          const offPenalty = offTrack ? (hardOff ? 0.4 : 0.24) : 0;
+        const sInput = (keys.left ? 1 : 0) - (keys.right ? 1 : 0);
+        const lineDiscipline = clamp(1 - Math.abs(lateral) / (TRACK_WIDTH * 0.46), 0, 1);
+        const steeringDiscipline = clamp(1 - Math.abs(sInput) * clamp((kmh - 115) / 210, 0, 1) * 0.38, 0, 1);
+        const platformBalance = clamp(1 - drift * 0.42 - damage * 0.24 - (offTrack ? 0.34 : 0), 0, 1);
+        const flowTarget = clamp(
+          lineDiscipline * 0.4 +
+          steeringDiscipline * 0.22 +
+          platformBalance * 0.28 +
+          (slip > 0.18 ? 0.1 : 0) +
+          (kmh > 165 ? 0.08 : 0) -
+          rainLevel * 0.08,
+          0,
+          1
+        );
+        const paceFactor = clamp(kmh / 180, 0, 1);
+        const pacedFlowTarget = clamp(flowTarget * paceFactor + (1 - paceFactor) * 0.12, 0, 1);
+        flowState = lerp(flowState, pacedFlowTarget, clamp(dt * 2.4, 0, 1));
+        peakFlow = Math.max(peakFlow, flowState);
 
-          const aeroDrag = (0.0012 + rainLevel * 0.0004) * speed * Math.abs(speed);
-          speed -= aeroDrag * dt;
+        const ersOn = racing && keys.ers && ers > 1 && kmh > 60;
+        ers = ersOn ? clamp(ers - dt * 24, 0, 100) : clamp(ers + dt * (8.5 + flowState * 7.5), 0, 100);
+
+        if (racing) {
+          const grip = clamp(1 - rainLevel * 0.28 - damage * 0.22 + flowState * 0.05, 0.45, 1.02);
+          const offPenalty = offTrack ? (hardOff ? 0.4 : 0.24) : 0;
 
           if (keys.up) speed += acc * (grip - offPenalty) * dt;
           if (keys.down) speed -= brk * dt;
@@ -1435,12 +1840,11 @@ export default function F1RacingGame() {
           let targetV = maxSpeed * (1 - damage * 0.24);
           targetV *= 1 - offPenalty * 0.68;
           targetV *= 1 + slip * 0.08;
+          targetV *= 1 + flowState * 0.025;
           if (drsOn) targetV *= 1.14;
           if (ersOn) targetV *= 1.09;
           speed = clamp(speed, -25, targetV);
 
-          const keyInput = (keys.left ? 1 : 0) - (keys.right ? 1 : 0);
-          const sInput = clamp(keyInput + (tiltEnabledRef.current ? tiltSteerRef.current : 0), -1, 1);
           steer = lerp(steer, sInput, clamp(dt * 10, 0, 1));
           const vRatio = clamp(Math.abs(speed) / Math.max(targetV, 1), 0, 1);
           const authority = (1 - vRatio * 0.72) * (grip - offPenalty * 0.35);
@@ -1466,6 +1870,7 @@ export default function F1RacingGame() {
               // Screen shake on collision
               shakeIntensity = Math.max(shakeIntensity, impact * 1.5);
               shakeDecay = 0.4;
+              if (soundEnabledRef.current) playCollisionSound();
             }
           });
 
@@ -1495,10 +1900,18 @@ export default function F1RacingGame() {
         }
 
         wheels.forEach((w, i) => {
-          w.rotation.x += speed * dt * 2.6;
-          if (i < 2) w.rotation.y = steer * 0.35;
+          if (w.children) {
+            w.children.forEach(child => {
+              if (child.geometry && child.geometry.type === 'CylinderGeometry') {
+                child.rotation.x = (child.rotation.x || 0) + speed * dt * 2.6;
+              }
+            });
+          }
+          if (i < 2) w.rotation.y = steer * 0.3;
         });
-        flap.rotation.x = lerp(flap.rotation.x, drsOn ? -0.25 : 0, dt * 9);
+        if (player.userData.drsFlap) {
+          player.userData.drsFlap.rotation.x = lerp(player.userData.drsFlap.rotation.x, drsOn ? 0.5 : 0.1, dt * 9);
+        }
 
         // ── Tire smoke when drifting ──
         if (drift > 0.3 && kmh > 80) {
@@ -1686,6 +2099,8 @@ export default function F1RacingGame() {
               weather: WEATHER_PRESETS[weatherTarget].name,
               isNewBestLap,
               personalBest: nextCareer.bestLap,
+              setupName: raceSetup.preset.name,
+              flowPeak: Math.round(peakFlow * 100),
               career: nextCareer,
               standings: standingsList.map((s, idx) => ({ id: s.id, position: idx + 1, laps: Math.floor(s.p) }))
             });
@@ -1716,6 +2131,7 @@ export default function F1RacingGame() {
         let hudMessage = '';
         if (offTrack) hudMessage = 'OFF TRACK - GRIP REDUCED';
         else if (keys.repair && inDrsZone(pT) && kmh < 55) hudMessage = 'PIT REPAIR IN PROGRESS';
+        else if (flowState > 0.84 && kmh > 185) hudMessage = raceSetup.preset.id === 'hammer' ? 'HAMMER TIME' : 'FLOW STATE';
         else if (slip > 0.2) hudMessage = 'SLIPSTREAM BOOST';
         else if (damage > 0.45) hudMessage = 'CAR DAMAGE HIGH - PIT WINDOW OPEN';
         else if (drsReady && !drsOn) hudMessage = 'DRS READY';
@@ -1789,29 +2205,16 @@ export default function F1RacingGame() {
         hudTick += dt;
         if (hudTick > 0.09) {
           hudTick = 0;
-          // Fast DOM updates to bypass React re-renders for high-frequency data
-          const speedEl = document.getElementById('hud-speed');
-          if (speedEl) speedEl.textContent = Math.round(kmh);
-          const gearEl = document.getElementById('hud-gear');
-          if (gearEl) gearEl.textContent = `G${gear}`;
-          const rpmFill = document.getElementById('hud-rpm-fill');
-          if (rpmFill) rpmFill.style.width = `${(Math.round(rpm) / 18000) * 100}%`;
-          const rpmLabel = document.getElementById('hud-rpm-label');
-          if (rpmLabel) rpmLabel.textContent = `${Math.round(rpm / 1000)}K RPM`;
-
-          const lapTimeEl = document.getElementById('hud-lap-time');
-          if (lapTimeEl) lapTimeEl.textContent = formatTime(lapTime);
-          const raceTimeEl = document.getElementById('hud-race-time');
-          if (raceTimeEl) raceTimeEl.textContent = formatTime(raceTime);
-
-          const posEl = document.getElementById('hud-pos');
-          if (posEl) posEl.textContent = `P ${pos}/${npcs.length + 1}`;
-
-          const lapEl = document.getElementById('hud-lap');
-          if (lapEl) lapEl.textContent = `LAP ${Math.min(lap, TOTAL_LAPS)}/${TOTAL_LAPS}`;
-
-          const fpsEl = document.getElementById('hud-fps');
-          if (fpsEl) fpsEl.textContent = `FPS: ${fps}`;
+          // Fast DOM updates to bypass React re-renders for high-frequency data.
+          if (hudDom.speed) hudDom.speed.textContent = Math.round(kmh);
+          if (hudDom.gear) hudDom.gear.textContent = `G${gear}`;
+          if (hudDom.rpmFill) hudDom.rpmFill.style.width = `${(Math.round(rpm) / 18000) * 100}%`;
+          if (hudDom.rpmLabel) hudDom.rpmLabel.textContent = `${Math.round(rpm / 1000)}K RPM`;
+          if (hudDom.lapTime) hudDom.lapTime.textContent = formatTime(lapTime);
+          if (hudDom.raceTime) hudDom.raceTime.textContent = formatTime(raceTime);
+          if (hudDom.position) hudDom.position.textContent = `P ${pos}/${npcs.length + 1}`;
+          if (hudDom.lap) hudDom.lap.textContent = `LAP ${Math.min(lap, TOTAL_LAPS)}/${TOTAL_LAPS}`;
+          if (hudDom.fps) hudDom.fps.textContent = `FPS: ${fps}`;
 
           setHud((prev) => ({
             ...prev,
@@ -1832,10 +2235,12 @@ export default function F1RacingGame() {
             damage: Math.round(damage * 100),
             weather: WEATHER_PRESETS[weatherTarget].name,
             camera: CAMERA_MODES[cameraMode],
+            fps,
+            flow: Math.round(flowState * 100),
+            profile: raceSetup.preset.shortLabel,
             slipstream: slip > 0.2,
             offTrack,
-            message: hudMessage,
-            tireTemp: Math.round(tireTemp)
+            message: hudMessage
           }));
 
           debugStateRef.current = {
@@ -1849,8 +2254,7 @@ export default function F1RacingGame() {
               speedKmh: Math.round(kmh),
               gear,
               rpm: Math.round(rpm),
-              damagePct: Math.round(damage * 100),
-              tireTempC: Math.round(tireTemp)
+              damagePct: Math.round(damage * 100)
             },
             race: {
               position: pos,
@@ -1864,8 +2268,10 @@ export default function F1RacingGame() {
               drsOn,
               ersPct: Math.round(ers),
               ersOn,
+              flowPct: Math.round(flowState * 100),
               weather: WEATHER_PRESETS[weatherTarget].name,
               camera: CAMERA_MODES[cameraMode],
+              setupProfile: raceSetup.preset.name,
               renderScale: Number(activePixelRatio.toFixed(2)),
               slipstream: slip > 0.2,
               offTrack,
@@ -1880,13 +2286,12 @@ export default function F1RacingGame() {
         }
 
         
-            // ── Wind noise: speed dependent ──
-
-            // ── Exhaust pops on lift-off at high RPM ──
-
-            // ── Gear shift thump ──
-
-            // ── Master volume ──
+            // ── Sound Updates ──
+            if (soundEnabledRef.current) {
+              updateEngineSound(kmh, rpm, keys.up);
+              if (keys.up && !prevThrottleRef.current) playGearShiftSound();
+            }
+            prevThrottleRef.current = keys.up;
       }
 
       renderer.render(scene, camera);
@@ -1908,6 +2313,10 @@ export default function F1RacingGame() {
     anim = requestAnimationFrame(animate);
 
     return () => {
+      cancelled = true;
+      Object.keys(keys).forEach((key) => {
+        keys[key] = false;
+      });
       cancelAnimationFrame(anim);
       delete window.advanceTime;
       window.removeEventListener('keydown', keyDown);
@@ -1925,6 +2334,7 @@ export default function F1RacingGame() {
       roadGeo.dispose();
       roadMat.dispose();
       lineGeo.dispose();
+      stopAudio();
       renderer.dispose();
       scene.traverse((obj) => {
         if (obj.geometry) obj.geometry.dispose();
@@ -1938,7 +2348,16 @@ export default function F1RacingGame() {
     };
   }, [sessionId]);
 
+  const toggleSound = () => {
+    if (!audioCtx) initAudio();
+    const next = !soundEnabledRef.current;
+    soundEnabledRef.current = next;
+    setSoundOn(next);
+    if (!next) stopAudio();
+  };
+
   const updateSetting = (key, value) => setSettings((prev) => ({ ...prev, [key]: value }));
+  const applyDriverPreset = (preset) => setSettings({ ...preset.settings });
 
   return (
     <div className="f1-root">
@@ -1948,9 +2367,47 @@ export default function F1RacingGame() {
       {phase === 'menu' && (
         <div className="menu-overlay">
           <div className="menu-card">
-            <p className="menu-kicker">Prototype Build 0.9</p>
+            <p className="menu-kicker">Champion's Briefing</p>
             <h1 className="menu-title">SILVERSTONE RUSH</h1>
-            <p className="menu-subtitle">Turning this F1 prototype into a high-end arcade racer feel.</p>
+            <p className="menu-subtitle">3D F1 Racing — DRS, ERS, weather dynamics, career mode, and setup strategy. Race 6 AI opponents across 5 laps.</p>
+
+            <div className="setup-preset-grid">
+              {DRIVER_PRESETS.map((preset) => {
+                const active = setupAnalysis.preset.id === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={`setup-preset ${active ? 'setup-preset-active' : ''}`}
+                    onClick={() => applyDriverPreset(preset)}
+                  >
+                    <span className="setup-preset-kicker">{preset.callSign}</span>
+                    <strong>{preset.name}</strong>
+                    <span className="setup-preset-copy">{preset.summary}</span>
+                    <div className="setup-traits">
+                      {preset.traits.map((trait) => (
+                        <span key={`${preset.id}-${trait}`} className="setup-trait">{trait}</span>
+                      ))}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="engineer-brief">
+              <div className="engineer-brief-head">
+                <span className="engineer-kicker">{engineerBrief.eyebrow}</span>
+                <span className="engineer-match">Spec Match {setupAnalysis.matchPct}%</span>
+              </div>
+              <h2 className="engineer-title">{engineerBrief.title}</h2>
+              <p className="engineer-copy">{engineerBrief.copy}</p>
+              <p className="engineer-focus"><strong>Track Note:</strong> {engineerBrief.focus}</p>
+              <div className="engineer-metrics">
+                {engineerBrief.metrics.map((metric) => (
+                  <span key={metric.label} className="engineer-metric">{metric.label} {metric.value}</span>
+                ))}
+              </div>
+            </div>
 
             <div className="menu-controls">
               <div className="control-block"><span>W / Arrow Up</span><span>Throttle</span></div>
@@ -1962,7 +2419,7 @@ export default function F1RacingGame() {
             <div className="menu-actions">
               <button id="start-btn" type="button" className="btn btn-primary" onClick={startRace}>Start Race</button>
               <button type="button" className="btn btn-secondary" onClick={() => setShowSettings((v) => !v)}>
-                {showSettings ? 'Hide Setup' : 'Setup'}
+                {showSettings ? 'Hide Fine Tune' : 'Fine Tune Setup'}
               </button>
             </div>
 
@@ -2000,31 +2457,24 @@ export default function F1RacingGame() {
 
             {showSettings && (
               <div className="settings-panel">
-                <div className="setting-row">
-                  <label>Top Speed</label>
-                  <span>{settings.maxSpeed} km/h</span>
-                  <input type="range" min="220" max="360" step="5" value={settings.maxSpeed} onChange={(e) => updateSetting('maxSpeed', Number(e.target.value))} />
+                <div className="settings-header">
+                  <span>Fine Tune The Car</span>
+                  <strong>{setupAnalysis.preset.name}</strong>
                 </div>
-                <div className="setting-row">
-                  <label>Acceleration</label>
-                  <span>{settings.acceleration}%</span>
-                  <input type="range" min="30" max="100" step="1" value={settings.acceleration} onChange={(e) => updateSetting('acceleration', Number(e.target.value))} />
-                </div>
-                <div className="setting-row">
-                  <label>Steering Response</label>
-                  <span>{settings.steering}%</span>
-                  <input type="range" min="25" max="100" step="1" value={settings.steering} onChange={(e) => updateSetting('steering', Number(e.target.value))} />
-                </div>
-                <div className="setting-row">
-                  <label>Brake Power</label>
-                  <span>{settings.brakePower}%</span>
-                  <input type="range" min="30" max="100" step="1" value={settings.brakePower} onChange={(e) => updateSetting('brakePower', Number(e.target.value))} />
-                </div>
-                <div className="setting-row">
-                  <label>AI Difficulty</label>
-                  <span>{settings.aiLevel}%</span>
-                  <input type="range" min="25" max="100" step="1" value={settings.aiLevel} onChange={(e) => updateSetting('aiLevel', Number(e.target.value))} />
-                </div>
+                {SETTING_CONTROLS.map((control) => (
+                  <div key={control.key} className="setting-row">
+                    <label>{control.label}</label>
+                    <span>{control.format(settings[control.key])}</span>
+                    <input
+                      type="range"
+                      min={control.min}
+                      max={control.max}
+                      step={control.step}
+                      value={settings[control.key]}
+                      onChange={(e) => updateSetting(control.key, Number(e.target.value))}
+                    />
+                  </div>
+                ))}
                 <button type="button" className="btn btn-reset" onClick={() => setSettings(DEFAULT_SETTINGS)}>Reset Setup</button>
               </div>
             )}
@@ -2043,9 +2493,13 @@ export default function F1RacingGame() {
             <div className="top-hud-right">
               <span className={`hud-chip ${hud.drsOn ? 'active-chip' : ''}`}>{hud.drsOn ? 'DRS OPEN' : (hud.drsReady ? 'DRS READY' : 'DRS OFF')}</span>
               <span className={`hud-chip cyan-chip ${hud.ersOn ? 'active-chip' : ''}`}>ERS {hud.ers}%</span>
+              <span className="hud-chip silver-chip">SPEC {hud.profile}</span>
               <span className="hud-chip">CAM {hud.camera}</span>
             </div>
           </div>
+          <button type="button" className="sound-toggle" onClick={toggleSound} title={soundOn ? 'Sound Off' : 'Sound On'}>
+            {soundOn ? '🔊' : '🔇'}
+          </button>
 
           <div className="speed-hud">
             <div id="hud-speed" className="speed-main">{hud.speed}</div>
@@ -2071,10 +2525,9 @@ export default function F1RacingGame() {
           <div className="status-strip">
             <span className={hud.slipstream ? 'accent-green' : ''}>Slipstream: {hud.slipstream ? 'ON' : 'OFF'}</span>
             <span className={hud.offTrack ? 'accent-red' : ''}>Track: {hud.offTrack ? 'OFF' : 'ON'}</span>
+            <span className={hud.flow > 80 ? 'accent-green' : (hud.flow < 50 ? 'accent-yellow' : '')}>Flow: {hud.flow}%</span>
             <span className={hud.damage > 45 ? 'accent-red' : (hud.damage > 22 ? 'accent-yellow' : '')}>Damage: {hud.damage}%</span>
             <span>Weather: {hud.weather}</span>
-            <span className={hud.tireTemp > 112 || hud.tireTemp < 66 ? 'accent-yellow' : ''}>Tyres: {hud.tireTemp}°C</span>
-            <span>{tiltEnabled ? 'Input: Tilt' : 'Input: Buttons'}</span>
             <span id="hud-fps">FPS: {hud.fps}</span>
           </div>
 
@@ -2083,24 +2536,23 @@ export default function F1RacingGame() {
           <div ref={minimapRef} className="minimap-shell" />
 
           <div className="controls-strip">
-            <span>WASD / Arrows Drive</span><span>Shift DRS</span><span>F ERS</span><span>Space Drift</span><span>B Pit Repair</span><span>C Camera</span><span>Esc Pause</span><span>Mobile: Tilt Mode</span>
+            <span>WASD / Arrows Drive</span><span>Shift DRS</span><span>F ERS</span><span>Space Drift</span><span>B Pit Repair</span><span>C Camera</span><span>Esc Pause</span>
           </div>
 
           {/* ── Mobile Touch Controls ── */}
           <div className="touch-controls">
             <div className="touch-left">
-              <button className="touch-btn touch-steer-l" onTouchStart={() => { keysRef.current.left = true; }} onTouchEnd={() => { keysRef.current.left = false; }} onTouchCancel={() => { keysRef.current.left = false; }} onMouseDown={() => { keysRef.current.left = true; }} onMouseUp={() => { keysRef.current.left = false; }} onContextMenu={(e) => e.preventDefault()}>&#9664;</button>
-              <button className="touch-btn touch-steer-r" onTouchStart={() => { keysRef.current.right = true; }} onTouchEnd={() => { keysRef.current.right = false; }} onTouchCancel={() => { keysRef.current.right = false; }} onMouseDown={() => { keysRef.current.right = true; }} onMouseUp={() => { keysRef.current.right = false; }} onContextMenu={(e) => e.preventDefault()}>&#9654;</button>
+              <TouchControlButton className="touch-btn touch-steer-l" controlKey="left" keysRef={keysRef}>&#9664;</TouchControlButton>
+              <TouchControlButton className="touch-btn touch-steer-r" controlKey="right" keysRef={keysRef}>&#9654;</TouchControlButton>
             </div>
             <div className="touch-right">
-              <button className="touch-btn touch-gas" onTouchStart={() => { keysRef.current.up = true; }} onTouchEnd={() => { keysRef.current.up = false; }} onTouchCancel={() => { keysRef.current.up = false; }} onMouseDown={() => { keysRef.current.up = true; }} onMouseUp={() => { keysRef.current.up = false; }} onContextMenu={(e) => e.preventDefault()}>GAS</button>
-              <button className="touch-btn touch-brake" onTouchStart={() => { keysRef.current.down = true; }} onTouchEnd={() => { keysRef.current.down = false; }} onTouchCancel={() => { keysRef.current.down = false; }} onMouseDown={() => { keysRef.current.down = true; }} onMouseUp={() => { keysRef.current.down = false; }} onContextMenu={(e) => e.preventDefault()}>BRK</button>
+              <TouchControlButton className="touch-btn touch-gas" controlKey="up" keysRef={keysRef}>GAS</TouchControlButton>
+              <TouchControlButton className="touch-btn touch-brake" controlKey="down" keysRef={keysRef}>BRK</TouchControlButton>
             </div>
             <div className="touch-extras">
-              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drs = true; }} onTouchEnd={() => { keysRef.current.drs = false; }} onTouchCancel={() => { keysRef.current.drs = false; }} onMouseDown={() => { keysRef.current.drs = true; }} onMouseUp={() => { keysRef.current.drs = false; }} onContextMenu={(e) => e.preventDefault()}>DRS</button>
-              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.ers = true; }} onTouchEnd={() => { keysRef.current.ers = false; }} onTouchCancel={() => { keysRef.current.ers = false; }} onMouseDown={() => { keysRef.current.ers = true; }} onMouseUp={() => { keysRef.current.ers = false; }} onContextMenu={(e) => e.preventDefault()}>ERS</button>
-              <button className="touch-btn touch-sm" onTouchStart={() => { keysRef.current.drift = true; }} onTouchEnd={() => { keysRef.current.drift = false; }} onTouchCancel={() => { keysRef.current.drift = false; }} onMouseDown={() => { keysRef.current.drift = true; }} onMouseUp={() => { keysRef.current.drift = false; }} onContextMenu={(e) => e.preventDefault()}>DRFT</button>
-              <button className={`touch-btn touch-sm ${tiltEnabled ? 'touch-btn-active' : ''}`} type="button" onClick={() => setTiltEnabled((v) => !v)} onContextMenu={(e) => e.preventDefault()}>{tiltEnabled ? 'TILT ON' : 'TILT'}</button>
+              <TouchControlButton className="touch-btn touch-sm" controlKey="drs" keysRef={keysRef}>DRS</TouchControlButton>
+              <TouchControlButton className="touch-btn touch-sm" controlKey="ers" keysRef={keysRef}>ERS</TouchControlButton>
+              <TouchControlButton className="touch-btn touch-sm" controlKey="drift" keysRef={keysRef}>DRFT</TouchControlButton>
             </div>
           </div>
 
@@ -2146,6 +2598,8 @@ export default function F1RacingGame() {
                   <div className="stat-block"><span className="stat-label">Total Time</span><span className="stat-value">{formatTime(result.total)}</span></div>
                   <div className="stat-block"><span className="stat-label">Best Lap</span><span className="stat-value">{result.best ? formatTime(result.best) : '--:--.---'}</span></div>
                   <div className="stat-block"><span className="stat-label">Weather</span><span className="stat-value">{result.weather}</span></div>
+                  <div className="stat-block"><span className="stat-label">Spec</span><span className="stat-value">{result.setupName || setupAnalysis.preset.name}</span></div>
+                  <div className="stat-block"><span className="stat-label">Peak Flow</span><span className="stat-value">{Number.isFinite(result.flowPeak) ? `${result.flowPeak}%` : '--'}</span></div>
                 </div>
                 <div className={`finish-callout ${result.isNewBestLap ? 'finish-callout-hot' : ''}`}>
                   {result.isNewBestLap ? 'New personal best lap.' : `Personal best: ${result.personalBest ? formatTime(result.personalBest) : '--:--.---'}`}
