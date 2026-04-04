@@ -153,11 +153,45 @@ const formatTime = (seconds) => {
 
 const inDrsZone = (t) => DRS_ZONES.some(([a, b]) => t >= a && t <= b);
 
-const getRaceProgress = (completedLaps, trackProgress, hasStartedRace = true) => (
-  completedLaps + (hasStartedRace ? trackProgress : trackProgress - 1)
-);
-
 const getDisplayLap = (completedLaps) => Math.min(TOTAL_LAPS, Math.max(0, completedLaps));
+
+const normalizeTrackT = (t) => ((t % 1) + 1) % 1;
+
+const syncRaceStateProgress = (raceState) => {
+  const wrappedT = normalizeTrackT(raceState.wrappedT);
+  raceState.wrappedT = wrappedT;
+  raceState.relativeProgress = raceState.hasTakenStart ? wrappedT : wrappedT - 1;
+};
+
+const createRaceState = ({ gridPosition, wrappedT, hasTakenStart }) => {
+  const raceState = {
+    gridPosition,
+    wrappedT,
+    relativeProgress: 0,
+    completedLaps: 0,
+    checkpointPassed: false,
+    hasTakenStart
+  };
+  syncRaceStateProgress(raceState);
+  return raceState;
+};
+
+const setRaceStateWrappedT = (raceState, wrappedT) => {
+  raceState.wrappedT = wrappedT;
+  syncRaceStateProgress(raceState);
+};
+
+const getRaceDistance = (raceState) => raceState.completedLaps + raceState.relativeProgress;
+
+const isCheckpointWindow = (wrappedT) => wrappedT > 0.45 && wrappedT < 0.55;
+
+const didCrossStartLineForward = (prevWrappedT, nextWrappedT, speedMetersPerSecond, lateralOffset = 0) => (
+  prevWrappedT > 0.9
+  && nextWrappedT < 0.1
+  && (nextWrappedT - prevWrappedT) < -0.5
+  && speedMetersPerSecond > 1
+  && Math.abs(lateralOffset) <= TRACK_WIDTH * 0.6
+);
 
 const paintSkyGlow = (ctx, x, y, weather) => {
   const glow = ctx.createRadialGradient(x, y, 0, x, y, 220);
@@ -487,7 +521,6 @@ export default function F1RacingGame() {
     phaseRef.current = 'countdown';
     setPhase('countdown');
     setSessionId((v) => v + 1);
-    console.log('startRace called, phaseRef:', phaseRef.current);
   };
 
   const restartRace = () => {
@@ -1374,6 +1407,7 @@ export default function F1RacingGame() {
     let heading = Math.atan2(curve.getTangentAt(startT).x, curve.getTangentAt(startT).z);
     player.rotation.y = heading;
     scene.add(player);
+    const playerRaceState = createRaceState({ gridPosition: 1, wrappedT: startT, hasTakenStart: true });
 
     // Player wheels reference
     const wheels = player.userData.wheels || [];
@@ -1421,10 +1455,7 @@ export default function F1RacingGame() {
       return {
         name: def.name,
         mesh: car,
-        t: gridT,
-        lap: 0,
-        startedRace: false,
-        hasPassedCheckpoint: false,
+        raceState: createRaceState({ gridPosition: i + 2, wrappedT: gridT, hasTakenStart: false }),
         speed: 0,
         lane: laneOffset,
         laneTarget: laneOffset,
@@ -1433,8 +1464,24 @@ export default function F1RacingGame() {
       };
     });
 
-    const standingsList = [{ id: 'YOU', p: 0 }];
-    npcDefs.forEach((def) => standingsList.push({ id: def.name, p: 0 }));
+    const buildStandings = (useGridOrder = false) => {
+      const entries = [
+        { id: 'YOU', gridPosition: playerRaceState.gridPosition, raceState: playerRaceState },
+        ...npcs.map((npc) => ({ id: npc.name, gridPosition: npc.raceState.gridPosition, raceState: npc.raceState }))
+      ];
+      const sorted = [...entries].sort((a, b) => {
+        if (useGridOrder) return a.gridPosition - b.gridPosition;
+        const progressDiff = getRaceDistance(b.raceState) - getRaceDistance(a.raceState);
+        if (Math.abs(progressDiff) > 0.0001) return progressDiff;
+        return a.gridPosition - b.gridPosition;
+      });
+      return sorted.map((entry, idx) => ({
+        id: entry.id,
+        position: idx + 1,
+        laps: getDisplayLap(entry.raceState.completedLaps),
+        progress: getRaceDistance(entry.raceState)
+      }));
+    };
 
     const rainCount = quality.rainCount;
     const rainPos = new Float32Array(rainCount * 3);
@@ -1569,17 +1616,13 @@ export default function F1RacingGame() {
     let speed = 0;
     let steer = 0;
     let drift = 0;
-    let pT = startT;
-    let prevT = startT;
-    let lap = 0;
+    let pT = playerRaceState.wrappedT;
     let bestLap = null;
     let lapStart = 0;
     let raceStart = 0;
     let sector = 1;
     let sectorStart = 0;
     let sectorTimes = [null, null, null];
-    let lastCross = -999999;
-    let hasPassedCheckpoint = false;
     let ers = 100;
     let damage = 0;
     let flowState = 0;
@@ -1721,6 +1764,7 @@ export default function F1RacingGame() {
         }
         if (elapsed >= 3.2) {
           setCountdown(null);
+          phaseRef.current = 'racing';
           setPhase('racing');
           raceStart = now;
           lapStart = now;
@@ -1737,11 +1781,12 @@ export default function F1RacingGame() {
       const aiTop = 68 + (cfg.aiLevel / 100) * 16;
 
       if (!finished && (racing || inCountdown)) {
-        pT = findNearestT(player.position, pT);
-        const idx = Math.floor(pT * samples) % samples;
+        setRaceStateWrappedT(playerRaceState, findNearestT(player.position, pT));
+        pT = playerRaceState.wrappedT;
+        const idx = Math.floor(playerRaceState.wrappedT * samples) % samples;
         const center = points[idx];
         const normal = normals[idx];
-        sampleTrack(pT, trackPoint, trackTangent, null);
+        sampleTrack(playerRaceState.wrappedT, trackPoint, trackTangent, null);
 
         tmpA.copy(player.position).sub(center);
         const lateral = tmpA.dot(normal);
@@ -2043,7 +2088,7 @@ export default function F1RacingGame() {
         weatherLapTimer += dt;
 
         npcs.forEach((npc, n) => {
-          const ni = Math.floor(npc.t * samples) % samples;
+          const ni = Math.floor(npc.raceState.wrappedT * samples) % samples;
           const c = curvatures[(ni + 6) % samples];
           const cornerPenalty = c * (0.36 + rainLevel * 0.22);
           const aggro = (cfg.aiLevel / 100) * 0.24 + npc.aggression * 0.14;
@@ -2055,26 +2100,30 @@ export default function F1RacingGame() {
           } else {
             const laneWobble = Math.sin(now * 0.00025 + npc.seed) * 2.2;
             npc.laneTarget = clamp(laneWobble + (n % 2 ? -0.9 : 0.9), -3.6, 3.6);
-            if (Math.abs(npc.t - pT) < 0.035) npc.laneTarget += speed > npc.speed ? -1.1 : 1.1;
+            if (Math.abs(npc.raceState.wrappedT - playerRaceState.wrappedT) < 0.035) npc.laneTarget += speed > npc.speed ? -1.1 : 1.1;
             npc.lane = lerp(npc.lane, npc.laneTarget, clamp(dt * 0.9, 0, 1));
 
+            const prevNpcWrappedT = npc.raceState.wrappedT;
             npc.speed = lerp(npc.speed, tSpeed, clamp(dt * 1.7, 0, 1));
-            npc.t += (npc.speed * dt) / trackLength;
-            if (npc.t >= 1) {
-              npc.t -= 1;
-              if (!npc.startedRace) {
-                npc.startedRace = true;
-              } else if (npc.hasPassedCheckpoint) {
-                npc.lap += 1;
-                npc.hasPassedCheckpoint = false;
+            setRaceStateWrappedT(npc.raceState, npc.raceState.wrappedT + (npc.speed * dt) / trackLength);
+
+            const npcCrossedStart = didCrossStartLineForward(prevNpcWrappedT, npc.raceState.wrappedT, npc.speed, npc.lane);
+            if (!npc.raceState.hasTakenStart && npcCrossedStart) {
+              npc.raceState.hasTakenStart = true;
+              syncRaceStateProgress(npc.raceState);
+              npc.raceState.checkpointPassed = false;
+            } else {
+              if (isCheckpointWindow(npc.raceState.wrappedT)) {
+                npc.raceState.checkpointPassed = true;
               }
-            }
-            if (npc.t > 0.45 && npc.t < 0.55) {
-              npc.hasPassedCheckpoint = true;
+              if (npc.raceState.hasTakenStart && npc.raceState.checkpointPassed && npcCrossedStart) {
+                npc.raceState.completedLaps += 1;
+                npc.raceState.checkpointPassed = false;
+              }
             }
           }
 
-          sampleTrack(npc.t, npcPoint, npcTangent, npcNormal);
+          sampleTrack(npc.raceState.wrappedT, npcPoint, npcTangent, npcNormal);
           npcTarget.copy(npcPoint).addScaledVector(npcNormal, npc.lane);
           npcTarget.y += 0.25;
           npc.mesh.position.lerp(npcTarget, clamp(dt * 4.2, 0, 1));
@@ -2086,33 +2135,38 @@ export default function F1RacingGame() {
           const npcHillSlope = Math.atan2(npcTangent.y, Math.sqrt(npcTangent.x * npcTangent.x + npcTangent.z * npcTangent.z));
           npc.mesh.rotation.x = -npcHillSlope;
         });
-        prevT = pT;
-        pT = findNearestT(player.position, pT);
+        const prevPlayerWrappedT = playerRaceState.wrappedT;
+        setRaceStateWrappedT(playerRaceState, findNearestT(player.position, pT));
+        pT = playerRaceState.wrappedT;
 
-        if (racing && pT > 0.45 && pT < 0.55) {
-          hasPassedCheckpoint = true;
+        const postPlayerIdx = Math.floor(playerRaceState.wrappedT * samples) % samples;
+        const postPlayerCenter = points[postPlayerIdx];
+        const postPlayerNormal = normals[postPlayerIdx];
+        tmpA.copy(player.position).sub(postPlayerCenter);
+        const playerPostLateral = tmpA.dot(postPlayerNormal);
+
+        if (racing && isCheckpointWindow(playerRaceState.wrappedT)) {
+          playerRaceState.checkpointPassed = true;
         }
 
-        const crossedStartLineForward = prevT > 0.9 && pT < 0.1 && (pT - prevT) < -0.5 && speed > 1;
-        if (racing && hasPassedCheckpoint && crossedStartLineForward && now - lastCross > 5000) {
-          lastCross = now;
-          hasPassedCheckpoint = false;
+        const crossedStartLineForward = didCrossStartLineForward(prevPlayerWrappedT, playerRaceState.wrappedT, speed, playerPostLateral);
+        if (racing && playerRaceState.checkpointPassed && crossedStartLineForward) {
+          playerRaceState.checkpointPassed = false;
           const lapSecs = lapStart > 0 ? (now - lapStart) / 1000 : 0;
           if (lapSecs > 20) bestLap = bestLap === null ? lapSecs : Math.min(bestLap, lapSecs);
 
-          lap += 1;
+          playerRaceState.completedLaps += 1;
           lapStart = now;
           sector = 1;
           sectorStart = now;
           sectorTimes = [null, null, null];
 
-          if (lap >= TOTAL_LAPS) {
+          if (playerRaceState.completedLaps >= TOTAL_LAPS) {
             finished = true;
+            phaseRef.current = 'finished';
             setPhase('finished');
-            standingsList[0].p = getRaceProgress(lap, pT);
-            npcs.forEach((n, i) => { standingsList[i + 1].p = getRaceProgress(n.lap, n.t, n.startedRace); });
-            standingsList.sort((a, b) => b.p - a.p);
-            const finalPosition = standingsList.findIndex((x) => x.id === 'YOU') + 1;
+            const finalStandings = buildStandings(false);
+            const finalPosition = finalStandings.find((entry) => entry.id === 'YOU')?.position || 1;
             const totalTime = raceStart ? (now - raceStart) / 1000 : 0;
             const currentCareer = careerStatsRef.current;
             const isNewBestLap = bestLap !== null && (currentCareer.bestLap === null || bestLap < currentCareer.bestLap);
@@ -2145,20 +2199,11 @@ export default function F1RacingGame() {
               setupName: raceSetup.preset.name,
               flowPeak: Math.round(peakFlow * 100),
               career: nextCareer,
-              standings: [
-                { id: 'YOU', laps: getDisplayLap(lap), progress: getRaceProgress(lap, pT) },
-                ...npcs.map((n) => ({
-                  id: n.name,
-                  laps: getDisplayLap(n.lap),
-                  progress: getRaceProgress(n.lap, n.t, n.startedRace)
-                }))
-              ]
-                .sort((a, b) => b.progress - a.progress)
-                .map((entry, idx) => ({ id: entry.id, position: idx + 1, laps: entry.laps }))
+              standings: finalStandings.map((entry) => ({ id: entry.id, position: entry.position, laps: entry.laps }))
             });
           }
 
-          if (lap >= 2 && lap <= TOTAL_LAPS && weatherLapTimer > 40) {
+          if (playerRaceState.completedLaps >= 2 && playerRaceState.completedLaps <= TOTAL_LAPS && weatherLapTimer > 40) {
             weatherLapTimer = 0;
             weatherTarget = (weatherTarget + 1 + Math.floor(Math.random() * 2)) % WEATHER_PRESETS.length;
             weatherBlend = 0;
@@ -2174,13 +2219,11 @@ export default function F1RacingGame() {
           }
         }
 
-        standingsList[0].p = getRaceProgress(lap, pT);
-        npcs.forEach((n, i) => { standingsList[i + 1].p = getRaceProgress(n.lap, n.t, n.startedRace); });
-        standingsList.sort((a, b) => b.p - a.p);
-        const pos = standingsList.findIndex((x) => x.id === 'YOU') + 1;
+        const standings = buildStandings(inCountdown);
+        const pos = standings.find((entry) => entry.id === 'YOU')?.position || 1;
         const raceTime = raceStart ? (now - raceStart) / 1000 : 0;
         const lapTime = lapStart ? (now - lapStart) / 1000 : 0;
-        const displayLap = getDisplayLap(lap);
+        const displayLap = getDisplayLap(playerRaceState.completedLaps);
         let hudMessage = '';
         if (offTrack) hudMessage = 'OFF TRACK - GRIP REDUCED';
         else if (keys.repair && inDrsZone(pT) && kmh < 55) hudMessage = 'PIT REPAIR IN PROGRESS';
@@ -2303,7 +2346,7 @@ export default function F1RacingGame() {
             player: {
               lap: displayLap,
               trackProgress: Number(pT.toFixed(3)),
-              lateralOffsetMeters: Number(lateral.toFixed(2)),
+              lateralOffsetMeters: Number(playerPostLateral.toFixed(2)),
               speedKmh: Math.round(kmh),
               gear,
               rpm: Math.round(rpm),
@@ -2330,9 +2373,9 @@ export default function F1RacingGame() {
               offTrack,
               finished
             },
-            leaders: standingsList.slice(0, 3).map((entry) => ({
+            leaders: standings.slice(0, 3).map((entry) => ({
               id: entry.id,
-              progress: Number(Math.max(0, entry.p).toFixed(3))
+              progress: Number(entry.progress.toFixed(3))
             })),
             hudMessage: hudMessage || null
           };
