@@ -743,9 +743,10 @@ export default function F1RacingGame() {
     const gridIndices = [];
     let gidx = 0;
 
-    // Draw grid slots for first 5 cars (0 to 0.015 of the track)
-    for (let k = 0; k < 5; k++) {
-      const gT = k * 0.003;
+    // Draw grid slots for 4 rows behind start line (8 cars in F1-style 2-wide grid)
+    for (let k = 0; k < 8; k++) {
+      const row = Math.floor(k / 2) + 1;
+      const gT = ((startT - row * 0.012) + 1) % 1;
       const rp = curve.getPointAt(gT);
       const rtan = curve.getTangentAt(gT).normalize();
       const rn = new THREE.Vector3(-rtan.z, 0, rtan.x).normalize();
@@ -1356,7 +1357,7 @@ export default function F1RacingGame() {
     };
 
     const player = buildF1Car(0xd8141f, quality.shadowMapEnabled);
-    const startT = 0.015;
+    const startT = 0;
     player.position.copy(curve.getPointAt(startT));
     player.position.y += 0.03;
     let heading = Math.atan2(curve.getTangentAt(startT).x, curve.getTangentAt(startT).z);
@@ -1394,18 +1395,27 @@ export default function F1RacingGame() {
 
     const npcs = npcDefs.map((def, i) => {
       const car = buildF1Car(def.color, quality.shadowMapEnabled);
-      const t = (startT - 0.018 * (i + 1) + 1) % 1;
-      car.position.copy(curve.getPointAt(t));
-      car.position.y += 0.25;
+      const row = Math.floor((i + 1) / 2) + 1;
+      const rowOffset = row * 0.012;
+      const side = (i + 1) % 2 === 0 ? -1 : 1;
+      const laneOffset = side * TRACK_WIDTH * 0.2;
+      const gridT = ((startT - rowOffset) + 1) % 1;
+      const gridPoint = curve.getPointAt(gridT);
+      const gridTangent = curve.getTangentAt(gridT).normalize();
+      const gridNormal = new THREE.Vector3(-gridTangent.z, 0, gridTangent.x).normalize();
+      car.position.copy(gridPoint).addScaledVector(gridNormal, laneOffset);
+      car.position.y += 0.03;
+      car.rotation.y = Math.atan2(gridTangent.x, gridTangent.z);
       scene.add(car);
       return {
         name: def.name,
         mesh: car,
-        t,
+        t: gridT,
         lap: 1,
+        hasPassedCheckpoint: false,
         speed: 62 + Math.random() * 6,
-        lane: (Math.random() - 0.5) * 3,
-        laneTarget: 0,
+        lane: laneOffset,
+        laneTarget: laneOffset,
         aggression: 0.4 + Math.random() * 0.45,
         seed: Math.random() * 1000
       };
@@ -1557,6 +1567,7 @@ export default function F1RacingGame() {
     let sectorStart = 0;
     let sectorTimes = [null, null, null];
     let lastCross = -999999;
+    let hasPassedCheckpoint = false;
     let ers = 100;
     let damage = 0;
     let flowState = 0;
@@ -2031,10 +2042,17 @@ export default function F1RacingGame() {
           const aggro = (cfg.aiLevel / 100) * 0.24 + npc.aggression * 0.14;
           const tSpeed = aiTop * (1 - cornerPenalty) * (1 + aggro * 0.16);
           npc.speed = lerp(npc.speed, tSpeed, clamp(dt * 1.7, 0, 1));
+          const prevNpcT = npc.t;
           npc.t += (npc.speed * dt) / trackLength;
           if (npc.t >= 1) {
             npc.t -= 1;
-            npc.lap += 1;
+            if (npc.hasPassedCheckpoint) {
+              npc.lap += 1;
+              npc.hasPassedCheckpoint = false;
+            }
+          }
+          if (npc.t > 0.45 && npc.t < 0.55) {
+            npc.hasPassedCheckpoint = true;
           }
 
           sampleTrack(npc.t, npcPoint, npcTangent, npcNormal);
@@ -2052,10 +2070,15 @@ export default function F1RacingGame() {
         prevT = pT;
         pT = findNearestT(player.position, pT);
 
-        if (racing && prevT > 0.93 && pT < 0.08 && now - lastCross > 7000 && kmh > 70) {
+        if (racing && pT > 0.45 && pT < 0.55) {
+          hasPassedCheckpoint = true;
+        }
+
+        if (racing && hasPassedCheckpoint && prevT > 0.9 && pT < 0.1 && now - lastCross > 5000) {
           lastCross = now;
+          hasPassedCheckpoint = false;
           const lapSecs = lapStart > 0 ? (now - lapStart) / 1000 : 0;
-          if (lap > 1 && lapSecs > 20) bestLap = bestLap === null ? lapSecs : Math.min(bestLap, lapSecs);
+          if (lapSecs > 20) bestLap = bestLap === null ? lapSecs : Math.min(bestLap, lapSecs);
 
           lap += 1;
           lapStart = now;
