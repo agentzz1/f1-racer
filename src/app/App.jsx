@@ -481,6 +481,7 @@ export default function F1RacingGame() {
     phaseRef.current = 'countdown';
     setPhase('countdown');
     setSessionId((v) => v + 1);
+    console.log('startRace called, phaseRef:', phaseRef.current);
   };
 
   const restartRace = () => {
@@ -504,6 +505,7 @@ export default function F1RacingGame() {
 
   useEffect(() => {
     if (!containerRef.current) return undefined;
+    if (phaseRef.current === 'menu') return undefined;
 
     const container = containerRef.current;
     let cancelled = false;
@@ -2347,20 +2349,20 @@ export default function F1RacingGame() {
       window.removeEventListener('keydown', keyDown);
       window.removeEventListener('keyup', keyUp);
       window.removeEventListener('resize', resize);
-      smokeGeo.dispose();
-      smokeMat.dispose();
-      sparkGeo.dispose();
-      sparkMat.dispose();
-      barrierGeo.dispose();
-      rainGeo.dispose();
-      rainMat.dispose();
-      skyTexture.dispose();
-      grassTexture.dispose();
-      roadGeo.dispose();
-      roadMat.dispose();
-      lineGeo.dispose();
-      stopAudio();
-      renderer.dispose();
+      if (smokeGeo) smokeGeo.dispose();
+      if (smokeMat) smokeMat.dispose();
+      if (sparkGeo) sparkGeo.dispose();
+      if (sparkMat) sparkMat.dispose();
+      if (barrierGeo) barrierGeo.dispose();
+      if (rainGeo) rainGeo.dispose();
+      if (rainMat) rainMat.dispose();
+      if (skyTexture) skyTexture.dispose();
+      if (grassTexture) grassTexture.dispose();
+      if (roadGeo) roadGeo.dispose();
+      if (roadMat) roadMat.dispose();
+      if (lineGeo) lineGeo.dispose();
+      try { stopAudio(); } catch(e) {}
+      try { renderer.dispose(); } catch(e) {}
       scene.traverse((obj) => {
         if (obj.geometry) obj.geometry.dispose();
         if (obj.material) {
