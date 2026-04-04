@@ -504,9 +504,6 @@ export default function F1RacingGame() {
 
   useEffect(() => {
     if (!containerRef.current) return undefined;
-    if (phaseRef.current === 'menu') {
-      return undefined;
-    }
 
     const container = containerRef.current;
     let cancelled = false;
