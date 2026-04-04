@@ -153,6 +153,16 @@ const formatTime = (seconds) => {
 
 const inDrsZone = (t) => DRS_ZONES.some(([a, b]) => t >= a && t <= b);
 
+const getRaceProgress = (completedLaps, trackProgress, hasStartedRace = true) => (
+  completedLaps + (hasStartedRace ? trackProgress : trackProgress - 1)
+);
+
+const getDisplayLap = (completedLaps, racePhase, isFinished = false) => {
+  if (isFinished) return TOTAL_LAPS;
+  if (racePhase === 'racing') return Math.min(completedLaps + 1, TOTAL_LAPS);
+  return completedLaps;
+};
+
 const paintSkyGlow = (ctx, x, y, weather) => {
   const glow = ctx.createRadialGradient(x, y, 0, x, y, 220);
   glow.addColorStop(0, `rgba(255,220,150,${0.9 - weather.rain * 0.5})`);
@@ -356,7 +366,7 @@ export default function F1RacingGame() {
     speed: 0,
     gear: 1,
     rpm: 4000,
-    lap: 1,
+    lap: 0,
     bestLap: null,
     lapTime: 0,
     raceTime: 0,
@@ -449,7 +459,7 @@ export default function F1RacingGame() {
       speed: 0,
       gear: 1,
       rpm: 4000,
-      lap: 1,
+      lap: 0,
       bestLap: null,
       lapTime: 0,
       raceTime: 0,
@@ -1416,7 +1426,8 @@ export default function F1RacingGame() {
         name: def.name,
         mesh: car,
         t: gridT,
-        lap: 1,
+        lap: 0,
+        startedRace: false,
         hasPassedCheckpoint: false,
         speed: 62 + Math.random() * 6,
         lane: laneOffset,
@@ -1564,7 +1575,7 @@ export default function F1RacingGame() {
     let drift = 0;
     let pT = startT;
     let prevT = startT;
-    let lap = 1;
+    let lap = 0;
     let bestLap = null;
     let lapStart = 0;
     let raceStart = 0;
@@ -2050,7 +2061,9 @@ export default function F1RacingGame() {
           npc.t += (npc.speed * dt) / trackLength;
           if (npc.t >= 1) {
             npc.t -= 1;
-            if (npc.hasPassedCheckpoint) {
+            if (!npc.startedRace) {
+              npc.startedRace = true;
+            } else if (npc.hasPassedCheckpoint) {
               npc.lap += 1;
               npc.hasPassedCheckpoint = false;
             }
@@ -2090,11 +2103,11 @@ export default function F1RacingGame() {
           sectorStart = now;
           sectorTimes = [null, null, null];
 
-          if (lap > TOTAL_LAPS) {
+          if (lap >= TOTAL_LAPS) {
             finished = true;
             setPhase('finished');
-            standingsList[0].p = lap - 1 + pT;
-            npcs.forEach((n, i) => { standingsList[i + 1].p = n.lap + n.t; });
+            standingsList[0].p = getRaceProgress(lap, pT);
+            npcs.forEach((n, i) => { standingsList[i + 1].p = getRaceProgress(n.lap, n.t, n.startedRace); });
             standingsList.sort((a, b) => b.p - a.p);
             const finalPosition = standingsList.findIndex((x) => x.id === 'YOU') + 1;
             const totalTime = raceStart ? (now - raceStart) / 1000 : 0;
@@ -2129,7 +2142,7 @@ export default function F1RacingGame() {
               setupName: raceSetup.preset.name,
               flowPeak: Math.round(peakFlow * 100),
               career: nextCareer,
-              standings: standingsList.map((s, idx) => ({ id: s.id, position: idx + 1, laps: Math.floor(s.p) }))
+              standings: standingsList.map((s, idx) => ({ id: s.id, position: idx + 1, laps: Math.min(TOTAL_LAPS, Math.max(0, Math.floor(s.p))) }))
             });
           }
 
@@ -2149,12 +2162,13 @@ export default function F1RacingGame() {
           }
         }
 
-        standingsList[0].p = lap - 1 + pT;
-        npcs.forEach((n, i) => { standingsList[i + 1].p = n.lap + n.t; });
+        standingsList[0].p = getRaceProgress(lap, pT);
+        npcs.forEach((n, i) => { standingsList[i + 1].p = getRaceProgress(n.lap, n.t, n.startedRace); });
         standingsList.sort((a, b) => b.p - a.p);
         const pos = standingsList.findIndex((x) => x.id === 'YOU') + 1;
         const raceTime = raceStart ? (now - raceStart) / 1000 : 0;
         const lapTime = lapStart ? (now - lapStart) / 1000 : 0;
+        const displayLap = getDisplayLap(lap, state, finished);
         let hudMessage = '';
         if (offTrack) hudMessage = 'OFF TRACK - GRIP REDUCED';
         else if (keys.repair && inDrsZone(pT) && kmh < 55) hudMessage = 'PIT REPAIR IN PROGRESS';
@@ -2240,7 +2254,7 @@ export default function F1RacingGame() {
           if (hudDom.lapTime) hudDom.lapTime.textContent = formatTime(lapTime);
           if (hudDom.raceTime) hudDom.raceTime.textContent = formatTime(raceTime);
           if (hudDom.position) hudDom.position.textContent = `P ${pos}/${npcs.length + 1}`;
-          if (hudDom.lap) hudDom.lap.textContent = `LAP ${Math.min(lap, TOTAL_LAPS)}/${TOTAL_LAPS}`;
+          if (hudDom.lap) hudDom.lap.textContent = `LAP ${displayLap}/${TOTAL_LAPS}`;
           if (hudDom.fps) hudDom.fps.textContent = `FPS: ${fps}`;
 
           setHud((prev) => ({
@@ -2248,7 +2262,7 @@ export default function F1RacingGame() {
             speed: Math.round(kmh),
             gear,
             rpm: Math.round(rpm),
-            lap: Math.min(lap, TOTAL_LAPS),
+            lap: displayLap,
             lapTime,
             raceTime,
             position: pos,
@@ -2275,7 +2289,7 @@ export default function F1RacingGame() {
             phase: state,
             countdown: inCountdown ? (countdownStep === 0 ? 'GO' : countdownStep) : null,
             player: {
-              lap: Math.min(lap, TOTAL_LAPS),
+              lap: displayLap,
               trackProgress: Number(pT.toFixed(3)),
               lateralOffsetMeters: Number(lateral.toFixed(2)),
               speedKmh: Math.round(kmh),
