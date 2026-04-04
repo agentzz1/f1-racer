@@ -15,6 +15,8 @@ import './index.css';
 
 const TOTAL_LAPS = 5;
 const TRACK_WIDTH = 20;
+const GRID_ROW_SPACING = 0.012;
+const GRID_SIDE_OFFSET = TRACK_WIDTH * 0.25;
 const CAMERA_MODES = ['CHASE', 'COCKPIT', 'BROADCAST'];
 const DRS_ZONES = [[0, 0.12], [0.25, 0.39]];
 const WEATHER_PRESETS = [
@@ -192,6 +194,23 @@ const didCrossStartLineForward = (prevWrappedT, nextWrappedT, speedMetersPerSeco
   && speedMetersPerSecond > 1
   && Math.abs(lateralOffset) <= TRACK_WIDTH * 0.6
 );
+
+const getGridSlotPlacement = (curve, slotIndex) => {
+  const row = Math.floor(slotIndex / 2) + 1;
+  const side = slotIndex % 2 === 0 ? -1 : 1;
+  const wrappedT = normalizeTrackT(-row * GRID_ROW_SPACING);
+  const point = curve.getPointAt(wrappedT);
+  const tangent = curve.getTangentAt(wrappedT).normalize();
+  const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+  const laneOffset = side * GRID_SIDE_OFFSET;
+  return {
+    wrappedT,
+    tangent,
+    normal,
+    laneOffset,
+    position: point.clone().addScaledVector(normal, laneOffset)
+  };
+};
 
 const paintSkyGlow = (ctx, x, y, weather) => {
   const glow = ctx.createRadialGradient(x, y, 0, x, y, 220);
@@ -401,7 +420,7 @@ export default function F1RacingGame() {
     lapTime: 0,
     raceTime: 0,
     position: 1,
-    competitors: 7,
+    competitors: 8,
     sector: 1,
     sectors: [null, null, null],
     drsReady: false,
@@ -789,15 +808,10 @@ export default function F1RacingGame() {
 
     // Draw grid slots for 4 rows behind start line (8 cars in F1-style 2-wide grid)
     for (let k = 0; k < 8; k++) {
-      const row = Math.floor(k / 2) + 1;
-      const gT = ((0 - row * 0.012) + 1) % 1;
-      const rp = curve.getPointAt(gT);
-      const rtan = curve.getTangentAt(gT).normalize();
-      const rn = new THREE.Vector3(-rtan.z, 0, rtan.x).normalize();
-
-      const side = (k % 2 === 0) ? -1 : 1;
-      const offset = TRACK_WIDTH * 0.25 * side;
-      const center = rp.clone().addScaledVector(rn, offset);
+      const slot = getGridSlotPlacement(curve, k);
+      const center = slot.position;
+      const rtan = slot.tangent;
+      const rn = slot.normal;
 
       // Slot box
       const w = 1.6;
@@ -1401,13 +1415,14 @@ export default function F1RacingGame() {
     };
 
     const player = buildF1Car(0xd8141f, quality.shadowMapEnabled);
-    const startT = 0;
-    player.position.copy(curve.getPointAt(startT));
+    const playerGridSlot = getGridSlotPlacement(curve, 0);
+    const startT = playerGridSlot.wrappedT;
+    player.position.copy(playerGridSlot.position);
     player.position.y += 0.03;
-    let heading = Math.atan2(curve.getTangentAt(startT).x, curve.getTangentAt(startT).z);
+    let heading = Math.atan2(playerGridSlot.tangent.x, playerGridSlot.tangent.z);
     player.rotation.y = heading;
     scene.add(player);
-    const playerRaceState = createRaceState({ gridPosition: 1, wrappedT: startT, hasTakenStart: true });
+    const playerRaceState = createRaceState({ gridPosition: 1, wrappedT: startT, hasTakenStart: false });
 
     // Player wheels reference
     const wheels = player.userData.wheels || [];
@@ -1435,30 +1450,24 @@ export default function F1RacingGame() {
       { name: 'Aston', color: 0x229971 },
       { name: 'Williams', color: 0x3571d0 },
       { name: 'Haas', color: 0xb6babd },
-      { name: 'Alpine', color: 0xff6bc6 }
+      { name: 'Alpine', color: 0xff6bc6 },
+      { name: 'Red Bull', color: 0x1f4fff }
     ];
 
     const npcs = npcDefs.map((def, i) => {
       const car = buildF1Car(def.color, quality.shadowMapEnabled);
-      const row = Math.floor((i + 1) / 2) + 1;
-      const rowOffset = row * 0.012;
-      const side = (i + 1) % 2 === 0 ? -1 : 1;
-      const laneOffset = side * TRACK_WIDTH * 0.2;
-      const gridT = ((startT - rowOffset) + 1) % 1;
-      const gridPoint = curve.getPointAt(gridT);
-      const gridTangent = curve.getTangentAt(gridT).normalize();
-      const gridNormal = new THREE.Vector3(-gridTangent.z, 0, gridTangent.x).normalize();
-      car.position.copy(gridPoint).addScaledVector(gridNormal, laneOffset);
+      const slot = getGridSlotPlacement(curve, i + 1);
+      car.position.copy(slot.position);
       car.position.y += 0.03;
-      car.rotation.y = Math.atan2(gridTangent.x, gridTangent.z);
+      car.rotation.y = Math.atan2(slot.tangent.x, slot.tangent.z);
       scene.add(car);
       return {
         name: def.name,
         mesh: car,
-        raceState: createRaceState({ gridPosition: i + 2, wrappedT: gridT, hasTakenStart: false }),
+        raceState: createRaceState({ gridPosition: i + 2, wrappedT: slot.wrappedT, hasTakenStart: false }),
         speed: 0,
-        lane: laneOffset,
-        laneTarget: laneOffset,
+        lane: slot.laneOffset,
+        laneTarget: slot.laneOffset,
         aggression: 0.4 + Math.random() * 0.45,
         seed: Math.random() * 1000
       };
@@ -2150,7 +2159,11 @@ export default function F1RacingGame() {
         }
 
         const crossedStartLineForward = didCrossStartLineForward(prevPlayerWrappedT, playerRaceState.wrappedT, speed, playerPostLateral);
-        if (racing && playerRaceState.checkpointPassed && crossedStartLineForward) {
+        if (racing && crossedStartLineForward && !playerRaceState.hasTakenStart) {
+          playerRaceState.hasTakenStart = true;
+          syncRaceStateProgress(playerRaceState);
+          playerRaceState.checkpointPassed = false;
+        } else if (racing && playerRaceState.hasTakenStart && playerRaceState.checkpointPassed && crossedStartLineForward) {
           playerRaceState.checkpointPassed = false;
           const lapSecs = lapStart > 0 ? (now - lapStart) / 1000 : 0;
           if (lapSecs > 20) bestLap = bestLap === null ? lapSecs : Math.min(bestLap, lapSecs);
@@ -2465,7 +2478,7 @@ export default function F1RacingGame() {
           <div className="menu-card">
             <p className="menu-kicker">Champion's Briefing</p>
             <h1 className="menu-title">SILVERSTONE RUSH</h1>
-            <p className="menu-subtitle">3D F1 Racing — DRS, ERS, weather dynamics, career mode, and setup strategy. Race 6 AI opponents across 5 laps.</p>
+            <p className="menu-subtitle">3D F1 Racing — DRS, ERS, weather dynamics, career mode, and setup strategy. Race 7 AI opponents across 5 laps.</p>
 
             <div className="setup-preset-grid">
               {DRIVER_PRESETS.map((preset) => {
@@ -2690,7 +2703,7 @@ export default function F1RacingGame() {
                 <div className="finish-badge">{result.position === 1 ? '🏆' : `P${result.position}`}</div>
                 <h2>{result.position === 1 ? 'VICTORY!' : result.position <= 3 ? 'PODIUM FINISH!' : 'RACE COMPLETE'}</h2>
                 <div className="finish-stats">
-                  <div className="stat-block"><span className="stat-label">Position</span><span className="stat-value">{result.position}/{result.standings ? result.standings.length : 7}</span></div>
+                  <div className="stat-block"><span className="stat-label">Position</span><span className="stat-value">{result.position}/{result.standings ? result.standings.length : 8}</span></div>
                   <div className="stat-block"><span className="stat-label">Total Time</span><span className="stat-value">{formatTime(result.total)}</span></div>
                   <div className="stat-block"><span className="stat-label">Best Lap</span><span className="stat-value">{result.best ? formatTime(result.best) : '--:--.---'}</span></div>
                   <div className="stat-block"><span className="stat-label">Weather</span><span className="stat-value">{result.weather}</span></div>
