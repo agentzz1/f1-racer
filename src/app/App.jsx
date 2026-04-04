@@ -746,7 +746,7 @@ export default function F1RacingGame() {
     // Draw grid slots for 4 rows behind start line (8 cars in F1-style 2-wide grid)
     for (let k = 0; k < 8; k++) {
       const row = Math.floor(k / 2) + 1;
-      const gT = ((startT - row * 0.012) + 1) % 1;
+      const gT = ((0 - row * 0.012) + 1) % 1;
       const rp = curve.getPointAt(gT);
       const rtan = curve.getTangentAt(gT).normalize();
       const rn = new THREE.Vector3(-rtan.z, 0, rtan.x).normalize();
@@ -2042,7 +2042,6 @@ export default function F1RacingGame() {
           const aggro = (cfg.aiLevel / 100) * 0.24 + npc.aggression * 0.14;
           const tSpeed = aiTop * (1 - cornerPenalty) * (1 + aggro * 0.16);
           npc.speed = lerp(npc.speed, tSpeed, clamp(dt * 1.7, 0, 1));
-          const prevNpcT = npc.t;
           npc.t += (npc.speed * dt) / trackLength;
           if (npc.t >= 1) {
             npc.t -= 1;
