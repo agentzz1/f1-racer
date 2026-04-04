@@ -1473,16 +1473,18 @@ export default function F1RacingGame() {
       };
     });
 
+    const gridPreviewCars = [player, ...npcs.map((npc) => npc.mesh)];
     const gridPreviewBounds = new THREE.Box3();
-    [player, ...npcs.map((npc) => npc.mesh)].forEach((car) => {
+    gridPreviewCars.forEach((car) => {
       gridPreviewBounds.expandByPoint(car.position);
     });
     const gridPreviewCenter = gridPreviewBounds.getCenter(new THREE.Vector3());
-    const gridPreviewSize = gridPreviewBounds.getSize(new THREE.Vector3());
     const gridPreviewForward = playerGridSlot.tangent.clone().normalize();
-    const gridPreviewMargin = 6;
-    const gridPreviewHalfWidth = Math.max(10, gridPreviewSize.x * 0.5 + gridPreviewMargin);
-    const gridPreviewHalfDepth = Math.max(10, gridPreviewSize.z * 0.5 + gridPreviewMargin);
+    const gridPreviewRadius = gridPreviewCars.reduce((maxRadius, car) => {
+      const dx = car.position.x - gridPreviewCenter.x;
+      const dz = car.position.z - gridPreviewCenter.z;
+      return Math.max(maxRadius, Math.hypot(dx, dz));
+    }, 0) + 10;
 
     const buildStandings = (useGridOrder = false) => {
       const entries = [
@@ -2263,17 +2265,18 @@ export default function F1RacingGame() {
         const activeCameraLabel = showGridCamera ? 'GRID' : CAMERA_MODES[cameraMode];
 
         if (showGridCamera) {
-          const halfVerticalFov = THREE.MathUtils.degToRad(44 * 0.5);
-          const heightForDepth = gridPreviewHalfDepth / Math.tan(halfVerticalFov);
-          const heightForWidth = gridPreviewHalfWidth / (Math.tan(halfVerticalFov) * Math.max(camera.aspect, 0.8));
-          const gridPreviewHeight = Math.max(heightForDepth, heightForWidth);
+          const halfVerticalFov = THREE.MathUtils.degToRad(56 * 0.5);
+          const halfHorizontalFov = Math.atan(Math.tan(halfVerticalFov) * Math.max(camera.aspect, 0.01));
+          const limitingHalfFov = Math.min(halfVerticalFov, halfHorizontalFov);
+          const gridPreviewHeight = (gridPreviewRadius / Math.tan(limitingHalfFov)) * 1.18;
           camTarget.copy(gridPreviewCenter);
           camTarget.y = gridPreviewCenter.y + gridPreviewHeight;
           lookTarget.copy(gridPreviewCenter);
           lookTarget.y = gridPreviewCenter.y;
           camera.up.set(gridPreviewForward.x, 0, gridPreviewForward.z);
-          camera.fov = 44;
-          camera.position.lerp(camTarget, clamp(dt * 2.8, 0, 1));
+          camera.fov = 56;
+          if (countdownStep === 3) camera.position.copy(camTarget);
+          else camera.position.lerp(camTarget, clamp(dt * 5.4, 0, 1));
         } else if (cameraMode === 0) {
           camera.up.set(0, 1, 0);
           camLift.set(0, 4 + vRatio * 2.5, 0);
