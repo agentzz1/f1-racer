@@ -478,6 +478,7 @@ export default function F1RacingGame() {
     setResult(null);
     setShowSettings(false);
     setCountdown(3);
+    phaseRef.current = 'countdown';
     setPhase('countdown');
     setSessionId((v) => v + 1);
   };
@@ -487,12 +488,14 @@ export default function F1RacingGame() {
     resetHud();
     setResult(null);
     setCountdown(3);
+    phaseRef.current = 'countdown';
     setPhase('countdown');
     setSessionId((v) => v + 1);
   };
 
   const backToMenu = () => {
     clearInputs();
+    phaseRef.current = 'menu';
     setPhase('menu');
     setResult(null);
     setCountdown(null);
@@ -500,7 +503,10 @@ export default function F1RacingGame() {
   };
 
   useEffect(() => {
-    if (!containerRef.current || phaseRef.current === 'menu') return undefined;
+    if (!containerRef.current) return undefined;
+    if (phaseRef.current === 'menu') {
+      return undefined;
+    }
 
     const container = containerRef.current;
     let cancelled = false;
