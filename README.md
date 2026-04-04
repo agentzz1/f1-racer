@@ -6,7 +6,7 @@ F1 Racer is a browser-based Formula 1 game built with React and Three.js. The pr
 
 Play the demo here:
 
-https://agentzz1.github.io/f1-racer
+https://kmosta19.github.io/f1-racer
 
 ## Highlights
 

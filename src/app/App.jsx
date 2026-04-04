@@ -15,6 +15,8 @@ import './index.css';
 
 const TOTAL_LAPS = 5;
 const TRACK_WIDTH = 20;
+const GRID_ROW_SPACING = 0.012;
+const GRID_SIDE_OFFSET = TRACK_WIDTH * 0.25;
 const CAMERA_MODES = ['CHASE', 'COCKPIT', 'BROADCAST'];
 const DRS_ZONES = [[0, 0.12], [0.25, 0.39]];
 const WEATHER_PRESETS = [
@@ -152,6 +154,63 @@ const formatTime = (seconds) => {
 };
 
 const inDrsZone = (t) => DRS_ZONES.some(([a, b]) => t >= a && t <= b);
+
+const getDisplayLap = (completedLaps) => Math.min(TOTAL_LAPS, Math.max(0, completedLaps));
+
+const normalizeTrackT = (t) => ((t % 1) + 1) % 1;
+
+const syncRaceStateProgress = (raceState) => {
+  const wrappedT = normalizeTrackT(raceState.wrappedT);
+  raceState.wrappedT = wrappedT;
+  raceState.relativeProgress = raceState.hasTakenStart ? wrappedT : wrappedT - 1;
+};
+
+const createRaceState = ({ gridPosition, wrappedT, hasTakenStart }) => {
+  const raceState = {
+    gridPosition,
+    wrappedT,
+    relativeProgress: 0,
+    completedLaps: 0,
+    checkpointPassed: false,
+    hasTakenStart
+  };
+  syncRaceStateProgress(raceState);
+  return raceState;
+};
+
+const setRaceStateWrappedT = (raceState, wrappedT) => {
+  raceState.wrappedT = wrappedT;
+  syncRaceStateProgress(raceState);
+};
+
+const getRaceDistance = (raceState) => raceState.completedLaps + raceState.relativeProgress;
+
+const isCheckpointWindow = (wrappedT) => wrappedT > 0.45 && wrappedT < 0.55;
+
+const didCrossStartLineForward = (prevWrappedT, nextWrappedT, speedMetersPerSecond, lateralOffset = 0) => (
+  prevWrappedT > 0.9
+  && nextWrappedT < 0.1
+  && (nextWrappedT - prevWrappedT) < -0.5
+  && speedMetersPerSecond > 1
+  && Math.abs(lateralOffset) <= TRACK_WIDTH * 0.6
+);
+
+const getGridSlotPlacement = (curve, slotIndex) => {
+  const row = Math.floor(slotIndex / 2) + 1;
+  const side = slotIndex % 2 === 0 ? -1 : 1;
+  const wrappedT = normalizeTrackT(-row * GRID_ROW_SPACING);
+  const point = curve.getPointAt(wrappedT);
+  const tangent = curve.getTangentAt(wrappedT).normalize();
+  const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+  const laneOffset = side * GRID_SIDE_OFFSET;
+  return {
+    wrappedT,
+    tangent,
+    normal,
+    laneOffset,
+    position: point.clone().addScaledVector(normal, laneOffset)
+  };
+};
 
 const paintSkyGlow = (ctx, x, y, weather) => {
   const glow = ctx.createRadialGradient(x, y, 0, x, y, 220);
@@ -356,12 +415,12 @@ export default function F1RacingGame() {
     speed: 0,
     gear: 1,
     rpm: 4000,
-    lap: 1,
+    lap: 0,
     bestLap: null,
     lapTime: 0,
     raceTime: 0,
     position: 1,
-    competitors: 7,
+    competitors: 8,
     sector: 1,
     sectors: [null, null, null],
     drsReady: false,
@@ -449,7 +508,7 @@ export default function F1RacingGame() {
       speed: 0,
       gear: 1,
       rpm: 4000,
-      lap: 1,
+      lap: 0,
       bestLap: null,
       lapTime: 0,
       raceTime: 0,
@@ -478,6 +537,7 @@ export default function F1RacingGame() {
     setResult(null);
     setShowSettings(false);
     setCountdown(3);
+    phaseRef.current = 'countdown';
     setPhase('countdown');
     setSessionId((v) => v + 1);
   };
@@ -487,12 +547,14 @@ export default function F1RacingGame() {
     resetHud();
     setResult(null);
     setCountdown(3);
+    phaseRef.current = 'countdown';
     setPhase('countdown');
     setSessionId((v) => v + 1);
   };
 
   const backToMenu = () => {
     clearInputs();
+    phaseRef.current = 'menu';
     setPhase('menu');
     setResult(null);
     setCountdown(null);
@@ -500,7 +562,8 @@ export default function F1RacingGame() {
   };
 
   useEffect(() => {
-    if (!containerRef.current || phaseRef.current === 'menu') return undefined;
+    if (!containerRef.current) return undefined;
+    if (phaseRef.current === 'menu') return undefined;
 
     const container = containerRef.current;
     let cancelled = false;
@@ -743,16 +806,12 @@ export default function F1RacingGame() {
     const gridIndices = [];
     let gidx = 0;
 
-    // Draw grid slots for first 5 cars (0 to 0.015 of the track)
-    for (let k = 0; k < 5; k++) {
-      const gT = k * 0.003;
-      const rp = curve.getPointAt(gT);
-      const rtan = curve.getTangentAt(gT).normalize();
-      const rn = new THREE.Vector3(-rtan.z, 0, rtan.x).normalize();
-
-      const side = (k % 2 === 0) ? -1 : 1;
-      const offset = TRACK_WIDTH * 0.25 * side;
-      const center = rp.clone().addScaledVector(rn, offset);
+    // Draw grid slots for 4 rows behind start line (8 cars in F1-style 2-wide grid)
+    for (let k = 0; k < 8; k++) {
+      const slot = getGridSlotPlacement(curve, k);
+      const center = slot.position;
+      const rtan = slot.tangent;
+      const rn = slot.normal;
 
       // Slot box
       const w = 1.6;
@@ -1356,12 +1415,14 @@ export default function F1RacingGame() {
     };
 
     const player = buildF1Car(0xd8141f, quality.shadowMapEnabled);
-    const startT = 0.015;
-    player.position.copy(curve.getPointAt(startT));
+    const playerGridSlot = getGridSlotPlacement(curve, 0);
+    const startT = playerGridSlot.wrappedT;
+    player.position.copy(playerGridSlot.position);
     player.position.y += 0.03;
-    let heading = Math.atan2(curve.getTangentAt(startT).x, curve.getTangentAt(startT).z);
+    let heading = Math.atan2(playerGridSlot.tangent.x, playerGridSlot.tangent.z);
     player.rotation.y = heading;
     scene.add(player);
+    const playerRaceState = createRaceState({ gridPosition: 1, wrappedT: startT, hasTakenStart: false });
 
     // Player wheels reference
     const wheels = player.userData.wheels || [];
@@ -1389,30 +1450,60 @@ export default function F1RacingGame() {
       { name: 'Aston', color: 0x229971 },
       { name: 'Williams', color: 0x3571d0 },
       { name: 'Haas', color: 0xb6babd },
-      { name: 'Alpine', color: 0xff6bc6 }
+      { name: 'Alpine', color: 0xff6bc6 },
+      { name: 'Red Bull', color: 0x1f4fff }
     ];
 
     const npcs = npcDefs.map((def, i) => {
       const car = buildF1Car(def.color, quality.shadowMapEnabled);
-      const t = (startT - 0.018 * (i + 1) + 1) % 1;
-      car.position.copy(curve.getPointAt(t));
-      car.position.y += 0.25;
+      const slot = getGridSlotPlacement(curve, i + 1);
+      car.position.copy(slot.position);
+      car.position.y += 0.03;
+      car.rotation.y = Math.atan2(slot.tangent.x, slot.tangent.z);
       scene.add(car);
       return {
         name: def.name,
         mesh: car,
-        t,
-        lap: 1,
-        speed: 62 + Math.random() * 6,
-        lane: (Math.random() - 0.5) * 3,
-        laneTarget: 0,
+        raceState: createRaceState({ gridPosition: i + 2, wrappedT: slot.wrappedT, hasTakenStart: false }),
+        speed: 0,
+        lane: slot.laneOffset,
+        laneTarget: slot.laneOffset,
         aggression: 0.4 + Math.random() * 0.45,
         seed: Math.random() * 1000
       };
     });
 
-    const standingsList = [{ id: 'YOU', p: 0 }];
-    npcDefs.forEach((def) => standingsList.push({ id: def.name, p: 0 }));
+    const gridPreviewCars = [player, ...npcs.map((npc) => npc.mesh)];
+    const gridPreviewBounds = new THREE.Box3();
+    gridPreviewCars.forEach((car) => {
+      gridPreviewBounds.expandByPoint(car.position);
+    });
+    const gridPreviewCenter = gridPreviewBounds.getCenter(new THREE.Vector3());
+    const gridPreviewForward = playerGridSlot.tangent.clone().normalize();
+    const gridPreviewRadius = gridPreviewCars.reduce((maxRadius, car) => {
+      const dx = car.position.x - gridPreviewCenter.x;
+      const dz = car.position.z - gridPreviewCenter.z;
+      return Math.max(maxRadius, Math.hypot(dx, dz));
+    }, 0) + 10;
+
+    const buildStandings = (useGridOrder = false) => {
+      const entries = [
+        { id: 'YOU', gridPosition: playerRaceState.gridPosition, raceState: playerRaceState },
+        ...npcs.map((npc) => ({ id: npc.name, gridPosition: npc.raceState.gridPosition, raceState: npc.raceState }))
+      ];
+      const sorted = [...entries].sort((a, b) => {
+        if (useGridOrder) return a.gridPosition - b.gridPosition;
+        const progressDiff = getRaceDistance(b.raceState) - getRaceDistance(a.raceState);
+        if (Math.abs(progressDiff) > 0.0001) return progressDiff;
+        return a.gridPosition - b.gridPosition;
+      });
+      return sorted.map((entry, idx) => ({
+        id: entry.id,
+        position: idx + 1,
+        laps: getDisplayLap(entry.raceState.completedLaps),
+        progress: getRaceDistance(entry.raceState)
+      }));
+    };
 
     const rainCount = quality.rainCount;
     const rainPos = new Float32Array(rainCount * 3);
@@ -1547,16 +1638,13 @@ export default function F1RacingGame() {
     let speed = 0;
     let steer = 0;
     let drift = 0;
-    let pT = startT;
-    let prevT = startT;
-    let lap = 1;
+    let pT = playerRaceState.wrappedT;
     let bestLap = null;
     let lapStart = 0;
     let raceStart = 0;
     let sector = 1;
     let sectorStart = 0;
     let sectorTimes = [null, null, null];
-    let lastCross = -999999;
     let ers = 100;
     let damage = 0;
     let flowState = 0;
@@ -1698,6 +1786,7 @@ export default function F1RacingGame() {
         }
         if (elapsed >= 3.2) {
           setCountdown(null);
+          phaseRef.current = 'racing';
           setPhase('racing');
           raceStart = now;
           lapStart = now;
@@ -1714,11 +1803,12 @@ export default function F1RacingGame() {
       const aiTop = 68 + (cfg.aiLevel / 100) * 16;
 
       if (!finished && (racing || inCountdown)) {
-        pT = findNearestT(player.position, pT);
-        const idx = Math.floor(pT * samples) % samples;
+        setRaceStateWrappedT(playerRaceState, findNearestT(player.position, pT));
+        pT = playerRaceState.wrappedT;
+        const idx = Math.floor(playerRaceState.wrappedT * samples) % samples;
         const center = points[idx];
         const normal = normals[idx];
-        sampleTrack(pT, trackPoint, trackTangent, null);
+        sampleTrack(playerRaceState.wrappedT, trackPoint, trackTangent, null);
 
         tmpA.copy(player.position).sub(center);
         const lateral = tmpA.dot(normal);
@@ -2020,24 +2110,42 @@ export default function F1RacingGame() {
         weatherLapTimer += dt;
 
         npcs.forEach((npc, n) => {
-          const ni = Math.floor(npc.t * samples) % samples;
+          const ni = Math.floor(npc.raceState.wrappedT * samples) % samples;
           const c = curvatures[(ni + 6) % samples];
-          const laneWobble = Math.sin(now * 0.00025 + npc.seed) * 2.2;
-          npc.laneTarget = clamp(laneWobble + (n % 2 ? -0.9 : 0.9), -3.6, 3.6);
-          if (Math.abs(npc.t - pT) < 0.035) npc.laneTarget += speed > npc.speed ? -1.1 : 1.1;
-          npc.lane = lerp(npc.lane, npc.laneTarget, clamp(dt * 0.9, 0, 1));
-
           const cornerPenalty = c * (0.36 + rainLevel * 0.22);
           const aggro = (cfg.aiLevel / 100) * 0.24 + npc.aggression * 0.14;
           const tSpeed = aiTop * (1 - cornerPenalty) * (1 + aggro * 0.16);
-          npc.speed = lerp(npc.speed, tSpeed, clamp(dt * 1.7, 0, 1));
-          npc.t += (npc.speed * dt) / trackLength;
-          if (npc.t >= 1) {
-            npc.t -= 1;
-            npc.lap += 1;
+
+          if (!racing) {
+            npc.speed = 0;
+            npc.laneTarget = npc.lane;
+          } else {
+            const laneWobble = Math.sin(now * 0.00025 + npc.seed) * 2.2;
+            npc.laneTarget = clamp(laneWobble + (n % 2 ? -0.9 : 0.9), -3.6, 3.6);
+            if (Math.abs(npc.raceState.wrappedT - playerRaceState.wrappedT) < 0.035) npc.laneTarget += speed > npc.speed ? -1.1 : 1.1;
+            npc.lane = lerp(npc.lane, npc.laneTarget, clamp(dt * 0.9, 0, 1));
+
+            const prevNpcWrappedT = npc.raceState.wrappedT;
+            npc.speed = lerp(npc.speed, tSpeed, clamp(dt * 1.7, 0, 1));
+            setRaceStateWrappedT(npc.raceState, npc.raceState.wrappedT + (npc.speed * dt) / trackLength);
+
+            const npcCrossedStart = didCrossStartLineForward(prevNpcWrappedT, npc.raceState.wrappedT, npc.speed, npc.lane);
+            if (!npc.raceState.hasTakenStart && npcCrossedStart) {
+              npc.raceState.hasTakenStart = true;
+              syncRaceStateProgress(npc.raceState);
+              npc.raceState.checkpointPassed = false;
+            } else {
+              if (isCheckpointWindow(npc.raceState.wrappedT)) {
+                npc.raceState.checkpointPassed = true;
+              }
+              if (npc.raceState.hasTakenStart && npc.raceState.checkpointPassed && npcCrossedStart) {
+                npc.raceState.completedLaps += 1;
+                npc.raceState.checkpointPassed = false;
+              }
+            }
           }
 
-          sampleTrack(npc.t, npcPoint, npcTangent, npcNormal);
+          sampleTrack(npc.raceState.wrappedT, npcPoint, npcTangent, npcNormal);
           npcTarget.copy(npcPoint).addScaledVector(npcNormal, npc.lane);
           npcTarget.y += 0.25;
           npc.mesh.position.lerp(npcTarget, clamp(dt * 4.2, 0, 1));
@@ -2049,27 +2157,42 @@ export default function F1RacingGame() {
           const npcHillSlope = Math.atan2(npcTangent.y, Math.sqrt(npcTangent.x * npcTangent.x + npcTangent.z * npcTangent.z));
           npc.mesh.rotation.x = -npcHillSlope;
         });
-        prevT = pT;
-        pT = findNearestT(player.position, pT);
+        const prevPlayerWrappedT = playerRaceState.wrappedT;
+        setRaceStateWrappedT(playerRaceState, findNearestT(player.position, pT));
+        pT = playerRaceState.wrappedT;
 
-        if (racing && prevT > 0.93 && pT < 0.08 && now - lastCross > 7000 && kmh > 70) {
-          lastCross = now;
+        const postPlayerIdx = Math.floor(playerRaceState.wrappedT * samples) % samples;
+        const postPlayerCenter = points[postPlayerIdx];
+        const postPlayerNormal = normals[postPlayerIdx];
+        tmpA.copy(player.position).sub(postPlayerCenter);
+        const playerPostLateral = tmpA.dot(postPlayerNormal);
+
+        if (racing && isCheckpointWindow(playerRaceState.wrappedT)) {
+          playerRaceState.checkpointPassed = true;
+        }
+
+        const crossedStartLineForward = didCrossStartLineForward(prevPlayerWrappedT, playerRaceState.wrappedT, speed, playerPostLateral);
+        if (racing && crossedStartLineForward && !playerRaceState.hasTakenStart) {
+          playerRaceState.hasTakenStart = true;
+          syncRaceStateProgress(playerRaceState);
+          playerRaceState.checkpointPassed = false;
+        } else if (racing && playerRaceState.hasTakenStart && playerRaceState.checkpointPassed && crossedStartLineForward) {
+          playerRaceState.checkpointPassed = false;
           const lapSecs = lapStart > 0 ? (now - lapStart) / 1000 : 0;
-          if (lap > 1 && lapSecs > 20) bestLap = bestLap === null ? lapSecs : Math.min(bestLap, lapSecs);
+          if (lapSecs > 20) bestLap = bestLap === null ? lapSecs : Math.min(bestLap, lapSecs);
 
-          lap += 1;
+          playerRaceState.completedLaps += 1;
           lapStart = now;
           sector = 1;
           sectorStart = now;
           sectorTimes = [null, null, null];
 
-          if (lap > TOTAL_LAPS) {
+          if (playerRaceState.completedLaps >= TOTAL_LAPS) {
             finished = true;
+            phaseRef.current = 'finished';
             setPhase('finished');
-            standingsList[0].p = lap - 1 + pT;
-            npcs.forEach((n, i) => { standingsList[i + 1].p = n.lap + n.t; });
-            standingsList.sort((a, b) => b.p - a.p);
-            const finalPosition = standingsList.findIndex((x) => x.id === 'YOU') + 1;
+            const finalStandings = buildStandings(false);
+            const finalPosition = finalStandings.find((entry) => entry.id === 'YOU')?.position || 1;
             const totalTime = raceStart ? (now - raceStart) / 1000 : 0;
             const currentCareer = careerStatsRef.current;
             const isNewBestLap = bestLap !== null && (currentCareer.bestLap === null || bestLap < currentCareer.bestLap);
@@ -2102,11 +2225,11 @@ export default function F1RacingGame() {
               setupName: raceSetup.preset.name,
               flowPeak: Math.round(peakFlow * 100),
               career: nextCareer,
-              standings: standingsList.map((s, idx) => ({ id: s.id, position: idx + 1, laps: Math.floor(s.p) }))
+              standings: finalStandings.map((entry) => ({ id: entry.id, position: entry.position, laps: entry.laps }))
             });
           }
 
-          if (lap >= 2 && lap <= TOTAL_LAPS && weatherLapTimer > 40) {
+          if (playerRaceState.completedLaps >= 2 && playerRaceState.completedLaps <= TOTAL_LAPS && weatherLapTimer > 40) {
             weatherLapTimer = 0;
             weatherTarget = (weatherTarget + 1 + Math.floor(Math.random() * 2)) % WEATHER_PRESETS.length;
             weatherBlend = 0;
@@ -2122,12 +2245,11 @@ export default function F1RacingGame() {
           }
         }
 
-        standingsList[0].p = lap - 1 + pT;
-        npcs.forEach((n, i) => { standingsList[i + 1].p = n.lap + n.t; });
-        standingsList.sort((a, b) => b.p - a.p);
-        const pos = standingsList.findIndex((x) => x.id === 'YOU') + 1;
+        const standings = buildStandings(inCountdown);
+        const pos = standings.find((entry) => entry.id === 'YOU')?.position || 1;
         const raceTime = raceStart ? (now - raceStart) / 1000 : 0;
         const lapTime = lapStart ? (now - lapStart) / 1000 : 0;
+        const displayLap = getDisplayLap(playerRaceState.completedLaps);
         let hudMessage = '';
         if (offTrack) hudMessage = 'OFF TRACK - GRIP REDUCED';
         else if (keys.repair && inDrsZone(pT) && kmh < 55) hudMessage = 'PIT REPAIR IN PROGRESS';
@@ -2139,8 +2261,24 @@ export default function F1RacingGame() {
         const vRatio = clamp(Math.abs(speed) / Math.max(maxSpeed, 1), 0, 1);
         const camForward = tmpA.set(Math.sin(heading), 0, Math.cos(heading));
         const side = tmpB.set(camForward.z, 0, -camForward.x);
+        const showGridCamera = inCountdown && countdownStep > 0;
+        const activeCameraLabel = showGridCamera ? 'GRID' : CAMERA_MODES[cameraMode];
 
-        if (cameraMode === 0) {
+        if (showGridCamera) {
+          const halfVerticalFov = THREE.MathUtils.degToRad(56 * 0.5);
+          const halfHorizontalFov = Math.atan(Math.tan(halfVerticalFov) * Math.max(camera.aspect, 0.01));
+          const limitingHalfFov = Math.min(halfVerticalFov, halfHorizontalFov);
+          const gridPreviewHeight = (gridPreviewRadius / Math.tan(limitingHalfFov)) * 1.18;
+          camTarget.copy(gridPreviewCenter);
+          camTarget.y = gridPreviewCenter.y + gridPreviewHeight;
+          lookTarget.copy(gridPreviewCenter);
+          lookTarget.y = gridPreviewCenter.y;
+          camera.up.set(gridPreviewForward.x, 0, gridPreviewForward.z);
+          camera.fov = 56;
+          if (countdownStep === 3) camera.position.copy(camTarget);
+          else camera.position.lerp(camTarget, clamp(dt * 5.4, 0, 1));
+        } else if (cameraMode === 0) {
+          camera.up.set(0, 1, 0);
           camLift.set(0, 4 + vRatio * 2.5, 0);
           lookLift.set(0, 1.2, 0);
           camTarget.copy(player.position).addScaledVector(camForward, -11 - vRatio * 5).add(camLift);
@@ -2148,6 +2286,7 @@ export default function F1RacingGame() {
           camera.fov = 72 + vRatio * 16;
           camera.position.lerp(camTarget, clamp(dt * 6.2, 0, 1));
         } else if (cameraMode === 1) {
+          camera.up.set(0, 1, 0);
           camLift.set(0, 1.05, 0);
           lookLift.set(0, 1.3, 0);
           camTarget.copy(player.position).addScaledVector(camForward, 1.4).add(camLift);
@@ -2155,6 +2294,7 @@ export default function F1RacingGame() {
           camera.fov = 84 + vRatio * 8;
           camera.position.lerp(camTarget, clamp(dt * 12, 0, 1));
         } else {
+          camera.up.set(0, 1, 0);
           camLift.set(0, 8 + vRatio * 2.5, 0);
           lookLift.set(0, 1.2, 0);
           camTarget.copy(player.position).addScaledVector(side, 12).addScaledVector(camForward, 3.5).add(camLift);
@@ -2213,7 +2353,7 @@ export default function F1RacingGame() {
           if (hudDom.lapTime) hudDom.lapTime.textContent = formatTime(lapTime);
           if (hudDom.raceTime) hudDom.raceTime.textContent = formatTime(raceTime);
           if (hudDom.position) hudDom.position.textContent = `P ${pos}/${npcs.length + 1}`;
-          if (hudDom.lap) hudDom.lap.textContent = `LAP ${Math.min(lap, TOTAL_LAPS)}/${TOTAL_LAPS}`;
+          if (hudDom.lap) hudDom.lap.textContent = `LAP ${displayLap}/${TOTAL_LAPS}`;
           if (hudDom.fps) hudDom.fps.textContent = `FPS: ${fps}`;
 
           setHud((prev) => ({
@@ -2221,7 +2361,7 @@ export default function F1RacingGame() {
             speed: Math.round(kmh),
             gear,
             rpm: Math.round(rpm),
-            lap: Math.min(lap, TOTAL_LAPS),
+            lap: displayLap,
             lapTime,
             raceTime,
             position: pos,
@@ -2234,7 +2374,7 @@ export default function F1RacingGame() {
             ersOn,
             damage: Math.round(damage * 100),
             weather: WEATHER_PRESETS[weatherTarget].name,
-            camera: CAMERA_MODES[cameraMode],
+            camera: activeCameraLabel,
             fps,
             flow: Math.round(flowState * 100),
             profile: raceSetup.preset.shortLabel,
@@ -2248,9 +2388,9 @@ export default function F1RacingGame() {
             phase: state,
             countdown: inCountdown ? (countdownStep === 0 ? 'GO' : countdownStep) : null,
             player: {
-              lap: Math.min(lap, TOTAL_LAPS),
+              lap: displayLap,
               trackProgress: Number(pT.toFixed(3)),
-              lateralOffsetMeters: Number(lateral.toFixed(2)),
+              lateralOffsetMeters: Number(playerPostLateral.toFixed(2)),
               speedKmh: Math.round(kmh),
               gear,
               rpm: Math.round(rpm),
@@ -2270,16 +2410,16 @@ export default function F1RacingGame() {
               ersOn,
               flowPct: Math.round(flowState * 100),
               weather: WEATHER_PRESETS[weatherTarget].name,
-              camera: CAMERA_MODES[cameraMode],
+              camera: activeCameraLabel,
               setupProfile: raceSetup.preset.name,
               renderScale: Number(activePixelRatio.toFixed(2)),
               slipstream: slip > 0.2,
               offTrack,
               finished
             },
-            leaders: standingsList.slice(0, 3).map((entry) => ({
+            leaders: standings.slice(0, 3).map((entry) => ({
               id: entry.id,
-              progress: Number(entry.p.toFixed(3))
+              progress: Number(entry.progress.toFixed(3))
             })),
             hudMessage: hudMessage || null
           };
@@ -2322,20 +2462,20 @@ export default function F1RacingGame() {
       window.removeEventListener('keydown', keyDown);
       window.removeEventListener('keyup', keyUp);
       window.removeEventListener('resize', resize);
-      smokeGeo.dispose();
-      smokeMat.dispose();
-      sparkGeo.dispose();
-      sparkMat.dispose();
-      barrierGeo.dispose();
-      rainGeo.dispose();
-      rainMat.dispose();
-      skyTexture.dispose();
-      grassTexture.dispose();
-      roadGeo.dispose();
-      roadMat.dispose();
-      lineGeo.dispose();
-      stopAudio();
-      renderer.dispose();
+      if (smokeGeo) smokeGeo.dispose();
+      if (smokeMat) smokeMat.dispose();
+      if (sparkGeo) sparkGeo.dispose();
+      if (sparkMat) sparkMat.dispose();
+      if (barrierGeo) barrierGeo.dispose();
+      if (rainGeo) rainGeo.dispose();
+      if (rainMat) rainMat.dispose();
+      if (skyTexture) skyTexture.dispose();
+      if (grassTexture) grassTexture.dispose();
+      if (roadGeo) roadGeo.dispose();
+      if (roadMat) roadMat.dispose();
+      if (lineGeo) lineGeo.dispose();
+      try { stopAudio(); } catch(e) {}
+      try { renderer.dispose(); } catch(e) {}
       scene.traverse((obj) => {
         if (obj.geometry) obj.geometry.dispose();
         if (obj.material) {
@@ -2369,7 +2509,7 @@ export default function F1RacingGame() {
           <div className="menu-card">
             <p className="menu-kicker">Champion's Briefing</p>
             <h1 className="menu-title">SILVERSTONE RUSH</h1>
-            <p className="menu-subtitle">3D F1 Racing — DRS, ERS, weather dynamics, career mode, and setup strategy. Race 6 AI opponents across 5 laps.</p>
+            <p className="menu-subtitle">3D F1 Racing — DRS, ERS, weather dynamics, career mode, and setup strategy. Race 7 AI opponents across 5 laps.</p>
 
             <div className="setup-preset-grid">
               {DRIVER_PRESETS.map((preset) => {
@@ -2594,7 +2734,7 @@ export default function F1RacingGame() {
                 <div className="finish-badge">{result.position === 1 ? '🏆' : `P${result.position}`}</div>
                 <h2>{result.position === 1 ? 'VICTORY!' : result.position <= 3 ? 'PODIUM FINISH!' : 'RACE COMPLETE'}</h2>
                 <div className="finish-stats">
-                  <div className="stat-block"><span className="stat-label">Position</span><span className="stat-value">{result.position}/{result.standings ? result.standings.length : 7}</span></div>
+                  <div className="stat-block"><span className="stat-label">Position</span><span className="stat-value">{result.position}/{result.standings ? result.standings.length : 8}</span></div>
                   <div className="stat-block"><span className="stat-label">Total Time</span><span className="stat-value">{formatTime(result.total)}</span></div>
                   <div className="stat-block"><span className="stat-label">Best Lap</span><span className="stat-value">{result.best ? formatTime(result.best) : '--:--.---'}</span></div>
                   <div className="stat-block"><span className="stat-label">Weather</span><span className="stat-value">{result.weather}</span></div>
