@@ -1479,11 +1479,10 @@ export default function F1RacingGame() {
     });
     const gridPreviewCenter = gridPreviewBounds.getCenter(new THREE.Vector3());
     const gridPreviewSize = gridPreviewBounds.getSize(new THREE.Vector3());
-    const gridPreviewSpan = Math.max(gridPreviewSize.x, gridPreviewSize.z, 18);
     const gridPreviewForward = playerGridSlot.tangent.clone().normalize();
-    const gridPreviewHeight = clamp(gridPreviewSpan * 1.75, 24, 42);
-    const gridPreviewBackOffset = clamp(gridPreviewSpan * 0.42, 8, 18);
-    const gridPreviewLookAhead = clamp(gridPreviewSpan * 0.2, 3, 8);
+    const gridPreviewMargin = 6;
+    const gridPreviewHalfWidth = Math.max(10, gridPreviewSize.x * 0.5 + gridPreviewMargin);
+    const gridPreviewHalfDepth = Math.max(10, gridPreviewSize.z * 0.5 + gridPreviewMargin);
 
     const buildStandings = (useGridOrder = false) => {
       const entries = [
@@ -2264,13 +2263,19 @@ export default function F1RacingGame() {
         const activeCameraLabel = showGridCamera ? 'GRID' : CAMERA_MODES[cameraMode];
 
         if (showGridCamera) {
-          camTarget.copy(gridPreviewCenter).addScaledVector(gridPreviewForward, -gridPreviewBackOffset);
+          const halfVerticalFov = THREE.MathUtils.degToRad(44 * 0.5);
+          const heightForDepth = gridPreviewHalfDepth / Math.tan(halfVerticalFov);
+          const heightForWidth = gridPreviewHalfWidth / (Math.tan(halfVerticalFov) * Math.max(camera.aspect, 0.8));
+          const gridPreviewHeight = Math.max(heightForDepth, heightForWidth);
+          camTarget.copy(gridPreviewCenter);
           camTarget.y = gridPreviewCenter.y + gridPreviewHeight;
-          lookTarget.copy(gridPreviewCenter).addScaledVector(gridPreviewForward, gridPreviewLookAhead);
-          lookTarget.y = gridPreviewCenter.y + 1.2;
-          camera.fov = 50;
+          lookTarget.copy(gridPreviewCenter);
+          lookTarget.y = gridPreviewCenter.y;
+          camera.up.set(gridPreviewForward.x, 0, gridPreviewForward.z);
+          camera.fov = 44;
           camera.position.lerp(camTarget, clamp(dt * 2.8, 0, 1));
         } else if (cameraMode === 0) {
+          camera.up.set(0, 1, 0);
           camLift.set(0, 4 + vRatio * 2.5, 0);
           lookLift.set(0, 1.2, 0);
           camTarget.copy(player.position).addScaledVector(camForward, -11 - vRatio * 5).add(camLift);
@@ -2278,6 +2283,7 @@ export default function F1RacingGame() {
           camera.fov = 72 + vRatio * 16;
           camera.position.lerp(camTarget, clamp(dt * 6.2, 0, 1));
         } else if (cameraMode === 1) {
+          camera.up.set(0, 1, 0);
           camLift.set(0, 1.05, 0);
           lookLift.set(0, 1.3, 0);
           camTarget.copy(player.position).addScaledVector(camForward, 1.4).add(camLift);
@@ -2285,6 +2291,7 @@ export default function F1RacingGame() {
           camera.fov = 84 + vRatio * 8;
           camera.position.lerp(camTarget, clamp(dt * 12, 0, 1));
         } else {
+          camera.up.set(0, 1, 0);
           camLift.set(0, 8 + vRatio * 2.5, 0);
           lookLift.set(0, 1.2, 0);
           camTarget.copy(player.position).addScaledVector(side, 12).addScaledVector(camForward, 3.5).add(camLift);
