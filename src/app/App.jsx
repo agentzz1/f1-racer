@@ -1473,6 +1473,18 @@ export default function F1RacingGame() {
       };
     });
 
+    const gridPreviewBounds = new THREE.Box3();
+    [player, ...npcs.map((npc) => npc.mesh)].forEach((car) => {
+      gridPreviewBounds.expandByPoint(car.position);
+    });
+    const gridPreviewCenter = gridPreviewBounds.getCenter(new THREE.Vector3());
+    const gridPreviewSize = gridPreviewBounds.getSize(new THREE.Vector3());
+    const gridPreviewSpan = Math.max(gridPreviewSize.x, gridPreviewSize.z, 18);
+    const gridPreviewForward = playerGridSlot.tangent.clone().normalize();
+    const gridPreviewHeight = clamp(gridPreviewSpan * 1.75, 24, 42);
+    const gridPreviewBackOffset = clamp(gridPreviewSpan * 0.42, 8, 18);
+    const gridPreviewLookAhead = clamp(gridPreviewSpan * 0.2, 3, 8);
+
     const buildStandings = (useGridOrder = false) => {
       const entries = [
         { id: 'YOU', gridPosition: playerRaceState.gridPosition, raceState: playerRaceState },
@@ -2248,8 +2260,17 @@ export default function F1RacingGame() {
         const vRatio = clamp(Math.abs(speed) / Math.max(maxSpeed, 1), 0, 1);
         const camForward = tmpA.set(Math.sin(heading), 0, Math.cos(heading));
         const side = tmpB.set(camForward.z, 0, -camForward.x);
+        const showGridCamera = inCountdown && countdownStep > 0;
+        const activeCameraLabel = showGridCamera ? 'GRID' : CAMERA_MODES[cameraMode];
 
-        if (cameraMode === 0) {
+        if (showGridCamera) {
+          camTarget.copy(gridPreviewCenter).addScaledVector(gridPreviewForward, -gridPreviewBackOffset);
+          camTarget.y = gridPreviewCenter.y + gridPreviewHeight;
+          lookTarget.copy(gridPreviewCenter).addScaledVector(gridPreviewForward, gridPreviewLookAhead);
+          lookTarget.y = gridPreviewCenter.y + 1.2;
+          camera.fov = 50;
+          camera.position.lerp(camTarget, clamp(dt * 2.8, 0, 1));
+        } else if (cameraMode === 0) {
           camLift.set(0, 4 + vRatio * 2.5, 0);
           lookLift.set(0, 1.2, 0);
           camTarget.copy(player.position).addScaledVector(camForward, -11 - vRatio * 5).add(camLift);
@@ -2343,7 +2364,7 @@ export default function F1RacingGame() {
             ersOn,
             damage: Math.round(damage * 100),
             weather: WEATHER_PRESETS[weatherTarget].name,
-            camera: CAMERA_MODES[cameraMode],
+            camera: activeCameraLabel,
             fps,
             flow: Math.round(flowState * 100),
             profile: raceSetup.preset.shortLabel,
@@ -2379,7 +2400,7 @@ export default function F1RacingGame() {
               ersOn,
               flowPct: Math.round(flowState * 100),
               weather: WEATHER_PRESETS[weatherTarget].name,
-              camera: CAMERA_MODES[cameraMode],
+              camera: activeCameraLabel,
               setupProfile: raceSetup.preset.name,
               renderScale: Number(activePixelRatio.toFixed(2)),
               slipstream: slip > 0.2,
